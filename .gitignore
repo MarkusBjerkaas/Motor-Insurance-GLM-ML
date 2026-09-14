@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Disposable scripts (see CLAUDE.md)
+src_temp/
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+.claude/handoffs/

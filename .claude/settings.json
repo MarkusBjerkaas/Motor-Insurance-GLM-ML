@@ -1,0 +1,21 @@
+﻿{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "ask": [
+      "Bash(git commit *)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ /workspaces/MotorForsikring/analysis.ipynb -nt /workspaces/MotorForsikring/analysis.py ] && uv run --project /workspaces/MotorForsikring jupytext --to py:percent /workspaces/MotorForsikring/analysis.ipynb -o /workspaces/MotorForsikring/analysis.py 2>/dev/null; true",
+            "statusMessage": "Syncing analysis.py from analysis.ipynb..."
+          }
+        ]
+      }
+    ]
+  }
+}
