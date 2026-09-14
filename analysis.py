@@ -32,6 +32,7 @@ from src.data_quality import (
     find_variables,
     run_integrity_checks,
 )
+from src.pre_split_diagnostics import build_pre_split_diagnostics
 
 pd.set_option("display.max_columns", 60)
 pd.set_option("display.max_colwidth", 120)
@@ -191,6 +192,72 @@ if not critical_failures.empty:
 # verdier er imputert. Diagnosene er funn som må vurderes før modellering.
 
 # %% [markdown]
-# # Deskriptiv analyse: 
-# Følgende rekkefølge: 
-# 1. Oppsummerende analyse av nåværende data.
+# # Deskriptiv analyse
+#
+# Før train/test-splitt gjør vi bare strukturell porteføljediagnostikk. Tabellene
+# under brukes til å definere risikopopulasjoner og vurdere tidsstrukturen, ikke
+# til å velge prediktorer eller transformasjoner fra skadeutfall.
+
+# %% [markdown]
+# ## 7. Porteføljestørrelse og tidsstruktur
+#
+# `først_observert_i_datasettet` betyr første observasjon i denne treårsperioden;
+# det er ikke nødvendigvis en reelt nytegnet polise. Eksponering oppsummeres som
+# poliseår, og delårseksponering er strengt mellom null og én.
+
+# %%
+pre_split = build_pre_split_diagnostics(data)
+display(pre_split["time_summary"])
+
+# %% [markdown]
+# ## 8. Panelstruktur
+#
+# Disse tabellene viser hvor lenge poliser observeres og hvor mye overlapp det er
+# mellom år. De begrunner en tidsbasert split fremfor tilfeldig splitting på radnivå.
+
+# %%
+display(pre_split["panel_duration"])
+display(pre_split["panel_transitions"])
+
+# %% [markdown]
+# ## 9. Porteføljesammensetning
+#
+# Sammensetningen vises per år uten skadeutfall. `vehicle_brand` oppsummeres
+# separat fordi variabelen har mange nivåer.
+
+# %%
+display(pre_split["composition_summary"])
+display(pre_split["brand_summary"])
+display(pre_split["top_brand_summary"])
+
+# %% [markdown]
+# ## 10. Dekningsmatrise
+#
+# Ansvar anses aktivt når `liability_exposure > 0`. For andre dekninger brukes
+# positiv totaleksponering og positiv dekningspremie som en praktisk proxy for at
+# dekningen er aktiv. Avvik med skade eller incurred ved null premie vises, slik
+# at regelen kan vurderes før modellering.
+
+# %%
+display(pre_split["coverage_summary"])
+display(pre_split["coverage_by_policy_type"])
+
+# %% [markdown]
+# ## 11. Begrenset responsoppsummering
+#
+# Dette er kun en volumkontroll per dekning, ikke analyse av skadeutfall mot
+# risikofaktorer. Klassifiseringen angir om skadevolumet grovt sett kan støtte en
+# selvstendig modell; den erstatter ikke senere faglig vurdering av credibility.
+
+# %%
+display(pre_split["response_summary"])
+
+# %% [markdown]
+# ## 12. Eksponeringskontroll
+#
+# Eksponeringen skal senere brukes som offset i frekvensmodeller. Tabellen
+# kontrollerer derfor nivåene og om skadeaktivitet forekommer ved null eksponering.
+
+# %%
+display(pre_split["exposure_summary"])
+display(pre_split["exposure_checks"])
