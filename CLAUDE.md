@@ -16,7 +16,7 @@ Rediger **aldri** `analysis.ipynb` direkte. Rediger alltid `analysis.py` (jupyte
 
 1. Ved starten av hver prompt kjører en hook automatisk som synker `analysis.py` fra `analysis.ipynb` (bare når ipynb er nyest), i tilfelle notebooken er redigert manuelt i Jupyter siden sist.
 2. Gjør alle endringer i `analysis.py`.
-3. Når endringene er ferdige: spør om bekreftelse på commit (som vanlig), commit, og kjør deretter konverteringsscriptet som oppdaterer `analysis.ipynb` fra `analysis.py`. Konverter aldri tilbake før commit er gjort.
+3. Når endringene er ferdige: spør om bekreftelse på commit (som vanlig), commit, og synkroniser deretter notebooken med `uv run jupytext --sync analysis.py`. Konverter aldri tilbake før commit er gjort. Ikke bruk `jupytext --to ipynb ... --output analysis.ipynb`; denne varianten kan skrive notebooken korrekt, men feile ved Jupytexts interne tidsstempeloppdatering. `--sync` håndterer det parede `.py`/`.ipynb`-settet robust.
 
 ## Modellering
 
@@ -26,3 +26,6 @@ Rediger **aldri** `analysis.ipynb` direkte. Rediger alltid `analysis.py` (jupyte
 ## Kodestil
 
 Godt kommentert og lesbart — jeg skal selv enkelt forstå hva som foregår. Kompakt, men lesbart. Ingen over-engineering.
+
+## Data
+Data er spansk forsikringsdata og hentet fra https://pmc.ncbi.nlm.nih.gov/articles/PMC13234478/

@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: Python 3 (ipykernel)
+#     display_name: MotorForsikring (3.12.14.final.0)
 #     language: python
 #     name: python3
 # ---
@@ -151,7 +151,7 @@ display(
             "clean_dtype": data.dtypes.astype(str),
             "missing_after_cleaning": data.isna().sum(),
         }
-    )
+    ).sort_values('missing_after_cleaning', ascending=False).head(6)
 )
 
 # %%
@@ -189,3 +189,8 @@ if not critical_failures.empty:
 #
 # Det rensede analysegrunnlaget ligger i `data`. Ingen rader er slettet og ingen
 # verdier er imputert. Diagnosene er funn som må vurderes før modellering.
+
+# %% [markdown]
+# # Deskriptiv analyse: 
+# Følgende rekkefølge: 
+# 1. Oppsummerende analyse av nåværende data.
