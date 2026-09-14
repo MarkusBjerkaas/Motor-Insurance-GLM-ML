@@ -1054,3 +1054,9 @@ display(temporal_diagnostics)
 #
 # Disse punktene er diagnostiske funn, ikke grunnlag for automatisk datatap i
 # denne rensefasen.
+
+# %%
+data.loc[data['driver_age'] > data['age_driving_licence']]
+
+# %% [markdown]
+#
