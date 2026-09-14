@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ /workspaces/MotorForsikring/analysis.ipynb -nt /workspaces/MotorForsikring/analysis.py ] && uv run --project /workspaces/MotorForsikring jupytext --to py:percent /workspaces/MotorForsikring/analysis.ipynb -o /workspaces/MotorForsikring/analysis.py 2>/dev/null; true",
+            "command": "set -eu; if [ /workspaces/MotorForsikring/analysis.ipynb -nt /workspaces/MotorForsikring/analysis.py ]; then uv run --project /workspaces/MotorForsikring jupytext --to py:percent --output /workspaces/MotorForsikring/analysis.py /workspaces/MotorForsikring/analysis.ipynb; fi",
             "statusMessage": "Syncing analysis.py from analysis.ipynb..."
           }
         ]

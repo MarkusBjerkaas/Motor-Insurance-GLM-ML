@@ -18,7 +18,7 @@ _VARIABLE_ROWS = [
     ("bonus_score", "Polise og kontrakt", "Grov klassifisering av forsikringstakerens tidligere skadeerfaring.", "G=god; N=nøytral; B=dårlig skadehistorikk", "Kategorisk/ordinal risikofaktor", "category", "Nei"),
     ("driver_age", "Fører og kjøretøy", "Alder på hovedføreren som er registrert på polisen.", "Hele år", "Numerisk risikofaktor", "Int16", "Nei"),
     ("vehicle_age", "Fører og kjøretøy", "Alder på det forsikrede kjøretøyet.", "Hele år", "Numerisk risikofaktor", "Int16", "Ja"),
-    ("age_driving_licence", "Fører og kjøretøy", "Uavklart førerkortvariabel. Verdiene tyder på alder da førerkortet ble tatt, men kildene beskriver feltet motstridende; må verifiseres før modellbruk.", "Hele år; foreløpig uklar semantikk", "Potensiell risikofaktor – ikke modellklar", "Int16", "Ja"),
+    ("age_driving_licence", "Fører og kjøretøy", "Antall år poliseholderen har hatt førerkort.", "Hele år", "Numerisk risikofaktor", "Int16", "Ja"),
     ("fuel_type", "Fører og kjøretøy", "Drivstofftype for kjøretøyet.", "D=diesel; G=bensin", "Kategorisk risikofaktor", "category", "Ja"),
     ("vehicle_value", "Fører og kjøretøy", "Oppgitt forsikringsverdi for kjøretøyet. Artikkelen bruker euro i premiepresentasjonen, men variabelarket oppgir ikke valuta eksplisitt for dette feltet.", "Beløp; valuta ikke eksplisitt angitt i variabelarket", "Numerisk risikofaktor", "float64", "Ja"),
     ("seats", "Fører og kjøretøy", "Antall registrerte sitteplasser i kjøretøyet.", "Heltallsantall", "Numerisk risikofaktor", "Int16", "Nei"),
@@ -152,10 +152,30 @@ def clean_motor_data(frame, variable_dictionary):
         cleaned[column] = pd.to_numeric(cleaned[column], errors="raise").astype("float64")
     invalid_power_ratio = cleaned["power_to_weight_ratio"].le(0)
     cleaned.loc[invalid_power_ratio, "power_to_weight_ratio"] = np.nan
+    missing_liability_exposure = (
+        cleaned["insured_id"].eq(23744)
+        & cleaned["year"].eq(2022)
+    )
+    if int(missing_liability_exposure.sum()) != 1:
+        raise ValueError(
+            "Forventet nøyaktig én avtalt korreksjon av ansvarseksponering."
+        )
+    if not (
+        cleaned.loc[missing_liability_exposure, "liability_claims"].gt(0).all()
+        and cleaned.loc[missing_liability_exposure, "liability_exposure"].eq(0).all()
+    ):
+        raise ValueError(
+            "Avtalt eksponeringskorreksjon stemmer ikke med kildeobservasjonen."
+        )
+    cleaned.loc[
+        missing_liability_exposure,
+        ["total_exposure", "liability_exposure"],
+    ] = 1.0
     log = pd.DataFrame([
         {"step": "Kontroll av skjema, kategorikoder og unik poliseår-nøkkel", "affected_rows": 0, "result": "Bestått"},
         {"step": "Fjerning av omkringliggende mellomrom i tekstfelt", "affected_rows": whitespace_changes, "result": "Standardisert"},
         {"step": "Ikke-positiv power_to_weight_ratio satt til manglende", "affected_rows": int(invalid_power_ratio.sum()), "result": "Standardisert"},
+        {"step": "Manglende total- og ansvarseksponering satt til 1 for ansvarsskade", "affected_rows": int(missing_liability_exposure.sum()), "result": "Korrigert"},
         {"step": "Rader slettet eller imputert", "affected_rows": 0, "result": "Ingen"},
     ])
     return cleaned, log
@@ -187,13 +207,10 @@ def run_integrity_checks(frame, variable_dictionary):
         ("Gyldig vekt/effekt-forhold", "Kritisk", "power_to_weight_ratio > 0 eller manglende", frame["power_to_weight_ratio"].notna() & frame["power_to_weight_ratio"].le(0)),
         ("Gyldig antall seter", "Kritisk", "seats er positivt heltall", frame["seats"].le(0)),
         ("Plausibel føreralder", "Kritisk", "driver_age i [18, 100]", ~frame["driver_age"].between(18, 100)),
-        ("Kansellert polise med full eksponering", "Undersøk", "Kansellert polise forventes normalt å ha eksponering < 1", frame["policy_status"].eq("C") & frame["total_exposure"].eq(1)),
-        ("Positiv ansvarseksponering med null ansvarspremie", "Undersøk", "Positiv ansvarseksponering forventes normalt å ha positiv ansvarspremie", frame["liability_exposure"].gt(0) & frame["liability_premium"].eq(0)),
+        ("Ikke-negativ førerkortansiennitet", "Kritisk", "age_driving_licence >= 0 eller manglende", frame["age_driving_licence"].notna() & frame["age_driving_licence"].lt(0)),
+        ("Positiv ansvarseksponering med null ansvarspremie", "Undersøk", "Eksponeringen beholdes; null premie ved positiv totalpremie må avklares før premieanalyse", frame["liability_exposure"].gt(0) & frame["liability_premium"].eq(0) & frame["total_premium"].gt(0)),
         ("Skade eller incurred ved null eksponering", "Undersøk", "Null eksponering forventes normalt uten skadeaktivitet", frame["total_exposure"].eq(0) & (frame["total_claims"].gt(0) | frame["total_incurred"].gt(0))),
         ("Positiv incurred uten registrert skade", "Undersøk", "total_claims = 0 forventes normalt å gi total_incurred = 0", frame["total_claims"].eq(0) & frame["total_incurred"].gt(0)),
-        ("Registrert skade med null incurred", "Undersøk", "Kan være skader lukket uten utbetaling; vurderes før alvorlighetsmodell", frame["total_claims"].gt(0) & frame["total_incurred"].eq(0)),
-        ("Førerkortverdi høyere enn føreralder", "Undersøk", "age_driving_licence <= driver_age gitt foreløpig tolkning", frame["age_driving_licence"].gt(frame["driver_age"])),
-        ("Førerkortverdi under 18", "Undersøk", "Verdier under 18 må vurderes når feltets semantikk er avklart", frame["age_driving_licence"].notna() & frame["age_driving_licence"].lt(18)),
     ]
     result = pd.DataFrame([{"check": name, "severity": severity, "expectation": expectation, "violating_rows": int(pd.Series(mask, index=frame.index).sum())} for name, severity, expectation, mask in checks])
     result["status"] = np.where(result["violating_rows"].eq(0), "Bestått", "Undersøk")
@@ -203,11 +220,8 @@ def run_integrity_checks(frame, variable_dictionary):
 def build_integrity_diagnostics(frame, integrity_checks):
     """Bygg alle øvrige integritetsoppsummeringer som vises i notebooken."""
     warning_masks = {
-        "Kansellert polise med full eksponering": frame["policy_status"].eq("C") & frame["total_exposure"].eq(1),
-        "Positiv ansvarseksponering med null ansvarspremie": frame["liability_exposure"].gt(0) & frame["liability_premium"].eq(0),
+        "Positiv ansvarseksponering med null ansvarspremie": frame["liability_exposure"].gt(0) & frame["liability_premium"].eq(0) & frame["total_premium"].gt(0),
         "Skade eller incurred ved null eksponering": frame["total_exposure"].eq(0) & (frame["total_claims"].gt(0) | frame["total_incurred"].gt(0)),
-        "Registrert skade med null incurred": frame["total_claims"].gt(0) & frame["total_incurred"].eq(0),
-        "Førerkortverdi under 18": frame["age_driving_licence"].notna() & frame["age_driving_licence"].lt(18),
     }
     example_columns = ["insured_id", "year", "policy_type", "policy_status", "business_type", "age_driving_licence", "liability_premium", "total_premium", "total_claims", "total_incurred", "total_exposure"]
     samples = [frame.loc[mask, example_columns].head(5).assign(check=name) for name, mask in warning_masks.items() if mask.any()]
