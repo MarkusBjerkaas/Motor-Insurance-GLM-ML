@@ -32,7 +32,10 @@ from src.data_quality import (
     find_variables,
     run_integrity_checks,
 )
-from src.pre_split_diagnostics import build_pre_split_diagnostics
+from src.pre_split_diagnostics import (
+    build_own_damage_scope_validation,
+    build_pre_split_diagnostics,
+)
 
 pd.set_option("display.max_columns", 60)
 pd.set_option("display.max_colwidth", 120)
@@ -209,6 +212,16 @@ if not critical_failures.empty:
 pre_split = build_pre_split_diagnostics(data)
 display(pre_split["time_summary"])
 
+# %%
+closed_2024 = data.loc[(data['total_exposure'] == 0) & (data['year'] == 2024)]['insured_id'].unique()
+
+# %%
+data.loc[data['insured_id'].isin(closed_2024)].sort_values('year')
+
+# %% [markdown]
+# ### Poliser med null eksponering i 2024.
+# 48 poliser har null eksponering i null premie i 2024. Dette er poliser som var aktiv i 2022 og 2023, men ikke i 2024. Beholdes for sporbarhet, men utelates i skadeanalysen og for train_test splitten.
+
 # %% [markdown]
 # ## 8. Panelstruktur
 #
@@ -228,7 +241,13 @@ display(pre_split["panel_transitions"])
 # %%
 display(pre_split["composition_summary"])
 display(pre_split["brand_summary"])
-display(pre_split["top_brand_summary"])
+display(pre_split["top_brand_summary"].sort_values('poliseår'))
+
+# %% [markdown]
+# ### Eksponering over bilmerker og polisetype:
+# De fleste bilmerker har relativt høy eksponering alle år, og vil derfor være en god kandidat for fremtidig analyse i GLM og andre modeller.
+#
+# Polise typen
 
 # %% [markdown]
 # ## 10. Dekningsmatrise
@@ -261,3 +280,31 @@ display(pre_split["response_summary"])
 # %%
 display(pre_split["exposure_summary"])
 display(pre_split["exposure_checks"])
+
+# %% [markdown]
+# ## 13. Avgrensning til egen-skadedekning
+#
+# Videre analyse avgrenses til poliseår med positiv `property_damage_premium` og
+# positiv `total_exposure`. Premien brukes bare til å identifisere at dekningen er
+# aktiv, ikke som prediktor. Denne avgrensningen gir en tydelig risikopopulasjon
+# med tilstrekkelig skadevolum for både frekvens- og severitymodellering. Naturlige
+# utvidelser er å gjenta samme analyse separat for de øvrige dekningene.
+
+# %%
+own_damage_mask = (
+    data["property_damage_premium"].gt(0) & data["total_exposure"].gt(0)
+)
+own_damage_data = data.loc[own_damage_mask].copy()
+scope_summary, scope_exceptions = build_own_damage_scope_validation(data)
+display(scope_summary)
+display(scope_exceptions)
+assert own_damage_data["property_damage_premium"].gt(0).all()
+assert own_damage_data["total_exposure"].gt(0).all()
+
+# %% [markdown]
+# Valideringen viser hvordan avgrensningen fordeler seg på produkttype og lister
+# alle skader som faller utenfor regelen. Slike unntak beholdes som dokumenterte
+# datavvik, men brukes ikke til å definere dekning fordi det ville innebære at
+# skadeutfallet bestemmer modellpopulasjonen.
+
+# %%

@@ -256,6 +256,41 @@ def build_exposure_summary(frame):
     return pd.DataFrame(rows).round(4), comparison
 
 
+def build_own_damage_scope_validation(frame):
+    """Valider modellpopulasjonen for egen-skadedekningen."""
+    active = frame["total_exposure"].gt(0) & frame["property_damage_premium"].gt(0)
+    labelled = frame.assign(own_damage_scope=active)
+    summary = labelled.groupby("policy_type", observed=True).agg(
+        poliseår=("insured_id", "size"),
+        poliseår_med_positiv_eksponering=("total_exposure", lambda s: s.gt(0).sum()),
+        poliseår_i_modell=("own_damage_scope", "sum"),
+        skadeantall_i_modell=(
+            "property_claims",
+            lambda s: s[labelled.loc[s.index, "own_damage_scope"]].sum(),
+        ),
+    )
+    summary["andel_av_positive_eksponeringer_prosent"] = summary[
+        "poliseår_i_modell"
+    ].div(summary["poliseår_med_positiv_eksponering"]).mul(100)
+    outside_loss = ~active & (
+        frame["property_claims"].gt(0) | frame["property_incurred"].gt(0)
+    )
+    exceptions = frame.loc[
+        outside_loss,
+        [
+            "insured_id",
+            "year",
+            "policy_type",
+            "policy_status",
+            "total_exposure",
+            "property_damage_premium",
+            "property_claims",
+            "property_incurred",
+        ],
+    ]
+    return summary.reset_index().round(2), exceptions
+
+
 def build_pre_split_diagnostics(frame):
     """Returner alle tabeller som trengs før train/test-splitt."""
     panel_duration, panel_transitions = build_panel_summary(frame)
