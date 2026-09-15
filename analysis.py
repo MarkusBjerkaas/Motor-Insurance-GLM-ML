@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: MotorForsikring (3.12.x)
 #     language: python
 #     name: python3
 # ---
@@ -55,6 +55,8 @@ if not DATA_PATH.exists() or not DESCRIPTION_PATH.exists():
     raise FileNotFoundError(
         "Kjør notebooken fra prosjektroten slik at begge filene i data/ er tilgjengelige."
     )
+
+seed = 100
 
 # %% [markdown]
 # ## 1. Uendret innlasting og første inspeksjon
@@ -267,12 +269,14 @@ display(plot_coverage_by_policy_type_heatmap(pre_split["coverage_by_policy_type"
 display(pre_split["coverage_summary"])
 
 # %% [markdown]
-# ## 10. Responsvolum per dekning
+# ## 10. Responsvolum og eksponering per dekning
 #
 # Ren volumkontroll per dekning, ikke analyse av skadeutfall mot
 # risikofaktorer. Egen skade har det klart høyeste skadevolumet blant
-# kasko-relevante dekninger og ligger godt over terskelen for selvstendig
-# modellering.
+# kasko-relevante dekninger, men klart lavest eksponering — fordi
+# risikopopulasjonen for egen skade er avgrenset til poliser med positiv
+# `property_damage_premium` (se `_coverage_mask`), mens de øvrige dekningene
+# dekker nær hele porteføljen.
 
 # %%
 display(plot_response_volume(pre_split["response_summary"]))
@@ -385,3 +389,4 @@ display(categorical_balance)
 display(numeric_balance)
 
 # %%
+cv

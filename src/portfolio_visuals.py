@@ -85,6 +85,7 @@ def plot_exposure_structure(frame):
     _stacked_bar(ax, counts, EXPOSURE_ORDER, EXPOSURE_COLORS, label_totals=True)
     _style_axes(ax, "Poliseår per år, etter eksponeringsstatus", "Poliseår")
     fig.tight_layout()
+    plt.close(fig)
     return fig
 
 
@@ -107,4 +108,5 @@ def plot_policy_type_composition(frame):
     _style_axes(ax, "Andel poliseår per policy_type, per år", "Andel av poliseår (%)")
     ax.set_ylim(0, 100)
     fig.tight_layout()
+    plt.close(fig)
     return fig
