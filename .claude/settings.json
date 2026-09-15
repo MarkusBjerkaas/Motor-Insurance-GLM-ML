@@ -16,6 +16,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.py) uv run --project /workspaces/MotorForsikring ruff format \"$f\" 2>/dev/null || true ;; esac",
+            "statusMessage": "Formatting with ruff..."
+          }
+        ]
+      }
     ]
   }
 }
