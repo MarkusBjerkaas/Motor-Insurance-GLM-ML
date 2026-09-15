@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: MotorForsikring (3.12.14.final.0)
+#     display_name: Python 3
 #     language: python
 #     name: python3
 # ---
@@ -24,7 +24,12 @@ from pathlib import Path
 
 import pandas as pd
 from IPython.display import display
+from sklearn.model_selection import GroupKFold
 
+from src.coverage_visuals import (
+    plot_coverage_by_policy_type_heatmap,
+    plot_response_volume,
+)
 from src.data_quality import (
     build_integrity_diagnostics,
     build_variable_dictionary,
@@ -32,10 +37,15 @@ from src.data_quality import (
     find_variables,
     run_integrity_checks,
 )
+from src.portfolio_visuals import (
+    plot_exposure_structure,
+    plot_policy_type_composition,
+)
 from src.pre_split_diagnostics import (
     build_own_damage_scope_validation,
     build_pre_split_diagnostics,
 )
+from src.train_test_split import build_key_variable_balance, build_split_summary
 
 pd.set_option("display.max_columns", 60)
 pd.set_option("display.max_colwidth", 120)
@@ -118,7 +128,7 @@ display(
 display(find_variables(variable_dictionary, search="policy_type"))
 
 # %%
-raw_data[raw_data['power_to_weight_ratio'] <= 0].head()
+raw_data[raw_data["power_to_weight_ratio"] <= 0].head()
 
 # %% [markdown]
 # ## 3. Beslutninger etter datakontroll
@@ -155,7 +165,9 @@ display(
             "clean_dtype": data.dtypes.astype(str),
             "missing_after_cleaning": data.isna().sum(),
         }
-    ).sort_values('missing_after_cleaning', ascending=False).head(6)
+    )
+    .sort_values("missing_after_cleaning", ascending=False)
+    .head(6)
 )
 
 # %%
@@ -202,109 +214,174 @@ if not critical_failures.empty:
 # til å velge prediktorer eller transformasjoner fra skadeutfall.
 
 # %% [markdown]
-# ## 7. Porteføljestørrelse og tidsstruktur
+# ## 7. Porteføljestørrelse, eksponering og panelstruktur
 #
-# `først_observert_i_datasettet` betyr første observasjon i denne treårsperioden;
-# det er ikke nødvendigvis en reelt nytegnet polise. Eksponering oppsummeres som
-# poliseår, og delårseksponering er strengt mellom null og én.
+# Eksponeringsstatus per år (null / delår / full år) viser porteføljens vekst
+# og at andelen fullårseksponerte poliser øker mot 2024. Panelstrukturen —
+# hvor lenge poliser observeres — begrunner en tidsbasert train/test-splitt
+# fremfor en tilfeldig radsplitt: samme polise opptrer typisk i flere år.
 
 # %%
 pre_split = build_pre_split_diagnostics(data)
-display(pre_split["time_summary"])
-
-# %%
-closed_2024 = data.loc[(data['total_exposure'] == 0) & (data['year'] == 2024)]['insured_id'].unique()
-
-# %%
-data.loc[data['insured_id'].isin(closed_2024)].sort_values('year')
-
-# %% [markdown]
-# ### Poliser med null eksponering i 2024.
-# 48 poliser har null eksponering i null premie i 2024. Dette er poliser som var aktiv i 2022 og 2023, men ikke i 2024. Beholdes for sporbarhet, men utelates i skadeanalysen og for train_test splitten.
-
-# %% [markdown]
-# ## 8. Panelstruktur
-#
-# Disse tabellene viser hvor lenge poliser observeres og hvor mye overlapp det er
-# mellom år. De begrunner en tidsbasert split fremfor tilfeldig splitting på radnivå.
+display(plot_exposure_structure(data))
 
 # %%
 display(pre_split["panel_duration"])
-display(pre_split["panel_transitions"])
 
 # %% [markdown]
-# ## 9. Porteføljesammensetning
-#
-# Sammensetningen vises per år uten skadeutfall. `vehicle_brand` oppsummeres
-# separat fordi variabelen har mange nivåer.
+# 48 poliser har null eksponering og null premie i 2024 (aktive i 2022/2023,
+# men ikke fornyet). De beholdes i datasettet for sporbarhet, men utelates fra
+# skadeanalysen og train/test-splitten siden de ikke representerer risiko i
+# noen periode med positiv eksponering.
 
 # %%
-display(pre_split["composition_summary"])
-display(pre_split["brand_summary"])
-display(pre_split["top_brand_summary"].sort_values('poliseår'))
+assert pre_split["exposure_checks"]["antall_poliseår"].eq(0).all(), (
+    "Uventet avvik i eksponeringskontrollen — se build_exposure_summary."
+)
 
 # %% [markdown]
-# ### Eksponering over bilmerker og polisetype:
-# De fleste bilmerker har relativt høy eksponering alle år, og vil derfor være en god kandidat for fremtidig analyse i GLM og andre modeller.
+# ## 8. Porteføljesammensetning: policy_type
 #
-# Polise typen
+# `policy_type` er den sentrale klassifiseringsvariabelen for dekning (se
+# dekningsmatrisen under) og er stabil over tid. Øvrige
+# sammensetningsvariabler er ikke kritiske for avgrensningsbeslutningen;
+# `vehicle_brand` har særlig mange nivåer og egner seg bedre som prediktor
+# senere i analysen enn som deskriptiv oversikt her.
+
+# %%
+display(plot_policy_type_composition(data))
 
 # %% [markdown]
-# ## 10. Dekningsmatrise
+# ## 9. Dekningsmatrise
 #
 # Ansvar anses aktivt når `liability_exposure > 0`. For andre dekninger brukes
-# positiv totaleksponering og positiv dekningspremie som en praktisk proxy for at
-# dekningen er aktiv. Avvik med skade eller incurred ved null premie vises, slik
-# at regelen kan vurderes før modellering.
+# positiv totaleksponering og positiv dekningspremie som en praktisk proxy for
+# at dekningen er aktiv (ingen per-dekning eksponeringsvariabel finnes).
+# Matrisen viser at egen skade (kasko) kun er aktiv for `policy_type` CC,
+# COMP_E og COMP_N — konsistent med at TP/TPG er rene ansvarsprodukter.
+
+# %%
+display(plot_coverage_by_policy_type_heatmap(pre_split["coverage_by_policy_type"]))
 
 # %%
 display(pre_split["coverage_summary"])
-display(pre_split["coverage_by_policy_type"])
 
 # %% [markdown]
-# ## 11. Begrenset responsoppsummering
+# ## 10. Responsvolum per dekning
 #
-# Dette er kun en volumkontroll per dekning, ikke analyse av skadeutfall mot
-# risikofaktorer. Klassifiseringen angir om skadevolumet grovt sett kan støtte en
-# selvstendig modell; den erstatter ikke senere faglig vurdering av credibility.
+# Ren volumkontroll per dekning, ikke analyse av skadeutfall mot
+# risikofaktorer. Egen skade har det klart høyeste skadevolumet blant
+# kasko-relevante dekninger og ligger godt over terskelen for selvstendig
+# modellering.
+
+# %%
+display(plot_response_volume(pre_split["response_summary"]))
 
 # %%
 display(pre_split["response_summary"])
 
 # %% [markdown]
-# ## 12. Eksponeringskontroll
+# ## 11. Avgrensning til egen-skadedekning
 #
-# Eksponeringen skal senere brukes som offset i frekvensmodeller. Tabellen
-# kontrollerer derfor nivåene og om skadeaktivitet forekommer ved null eksponering.
+# Basert på dekningsmatrisen (seksjon 9) og responsvolumet (seksjon 10)
+# avgrenses videre analyse til poliseår med positiv `property_damage_premium`
+# og positiv `total_exposure`. Premien brukes bare til å identifisere at
+# dekningen er aktiv, ikke som prediktor. Denne avgrensningen gir en tydelig
+# risikopopulasjon med tilstrekkelig skadevolum for både frekvens- og
+# severitymodellering. Naturlige utvidelser er å gjenta samme analyse separat
+# for de øvrige dekningene.
 
 # %%
-display(pre_split["exposure_summary"])
-display(pre_split["exposure_checks"])
-
-# %% [markdown]
-# ## 13. Avgrensning til egen-skadedekning
-#
-# Videre analyse avgrenses til poliseår med positiv `property_damage_premium` og
-# positiv `total_exposure`. Premien brukes bare til å identifisere at dekningen er
-# aktiv, ikke som prediktor. Denne avgrensningen gir en tydelig risikopopulasjon
-# med tilstrekkelig skadevolum for både frekvens- og severitymodellering. Naturlige
-# utvidelser er å gjenta samme analyse separat for de øvrige dekningene.
-
-# %%
-own_damage_mask = (
-    data["property_damage_premium"].gt(0) & data["total_exposure"].gt(0)
-)
-own_damage_data = data.loc[own_damage_mask].copy()
-scope_summary, scope_exceptions = build_own_damage_scope_validation(data)
+own_damage_mask = data["property_damage_premium"].gt(0) & data["total_exposure"].gt(0)
+df = data.loc[own_damage_mask].copy()
+scope_summary, scope_exceptions = build_own_damage_scope_validation(df)
 display(scope_summary)
 display(scope_exceptions)
-assert own_damage_data["property_damage_premium"].gt(0).all()
-assert own_damage_data["total_exposure"].gt(0).all()
+assert df["property_damage_premium"].gt(0).all()
+assert df["total_exposure"].gt(0).all()
 
 # %% [markdown]
 # Valideringen viser hvordan avgrensningen fordeler seg på produkttype og lister
 # alle skader som faller utenfor regelen. Slike unntak beholdes som dokumenterte
 # datavvik, men brukes ikke til å definere dekning fordi det ville innebære at
 # skadeutfallet bestemmer modellpopulasjonen.
+
+# %%
+df.loc[(df["total_exposure"]) != (df["liability_exposure"])]
+
+# %%
+df.head()
+
+# %% [markdown]
+# ## 12. Train/test-splitt
+#
+# Splitten er tidsbasert (out-of-time), ikke en tilfeldig radsplitt: 2022 og
+# 2023 slås sammen til en train/CV-pool, mens 2024 holdes urørt som endelig
+# test. Dette speiler faktisk bruk av en prisingsmodell — fit på historikk,
+# prises på neste års fornyelser — og fanger opp temporal drift (f.eks.
+# skadeinflasjon) som en tilfeldig splitt ikke ville avslørt.
+#
+# Hyperparametertuning skjer med `GroupKFold` på `insured_id` innad i
+# train/CV-pool, ikke vanlig radbasert k-fold: samme polise kan opptre i både
+# 2022 og 2023, og uten gruppering kunne de to poliseårene til samme polise
+# havnet i ulike foldere og gitt et for optimistisk CV-estimat. Testsettet
+# rører vi ikke igjen før endelig evaluering. All videre deskriptiv/
+# eksplorativ analyse av prediktorer bør fra nå av kun bruke `train_pool`.
+
+# %%
+TRAIN_YEARS = [2022, 2023]
+TEST_YEAR = 2024
+
+
+def make_train_test_split(frame, n_splits=5):
+    """Del modellpopulasjonen i en train/CV-pool og en urørt testperiode."""
+    train_pool = frame.loc[frame["year"].isin(TRAIN_YEARS)].copy()
+    test = frame.loc[frame["year"].eq(TEST_YEAR)].copy()
+    cv = GroupKFold(n_splits=n_splits)
+    return train_pool, test, cv
+
+
+def check_group_disjoint_folds(train_pool, cv, groups):
+    """Bekreft at ingen insured_id opptrer i både train- og valideringsfold."""
+    for fold, (train_idx, val_idx) in enumerate(cv.split(train_pool, groups=groups)):
+        train_fold_ids = set(groups.iloc[train_idx])
+        val_fold_ids = set(groups.iloc[val_idx])
+        if train_fold_ids & val_fold_ids:
+            raise ValueError(
+                f"Fold {fold} har overlappende insured_id mellom train og val."
+            )
+    return True
+
+
+# %%
+train_pool, test, cv = make_train_test_split(df, n_splits=5)
+split_summary, overlap_summary = build_split_summary(train_pool, test)
+display(split_summary)
+display(overlap_summary)
+
+# %% [markdown]
+# Overlappen mellom train/CV-pool og test er forventet og ønsket her — det
+# er videreførte poliser som prises på nytt i 2024, ikke lekkasje. Til slutt
+# bekreftes det at `GroupKFold` faktisk holder `insured_id` adskilt mellom
+# train- og valideringsfold.
+
+# %%
+check_group_disjoint_folds(train_pool, cv, train_pool["insured_id"])
+
+# %% [markdown]
+# ### Balansediagnostikk: nøkkelvariabler i train/CV-pool vs. test
+#
+# Splitten er tidsbasert, ikke tilfeldig, så det er ikke gitt at fordelingen av
+# sentrale risikofaktorer er lik i de to periodene. Tabellene under viser andel
+# per kategori (kategoriske variabler) og standardized mean difference, SMD
+# (numeriske variabler) mellom train/CV-pool og test. Store avvik er ikke i seg
+# selv et problem — testsettet skal representere fremtidige fornyelser, ikke en
+# tilfeldig delmengde av samme populasjon — men avvik bør være kjent før
+# modellresultater tolkes.
+
+# %%
+categorical_balance, numeric_balance = build_key_variable_balance(train_pool, test)
+display(categorical_balance)
+display(numeric_balance)
 
 # %%
