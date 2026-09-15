@@ -42,10 +42,6 @@ from src.own_damage_descriptives import (
     CATEGORICAL_VARS,
     NUMERIC_VARS,
     build_age_diagnostics,
-    build_bonus_change_summary,
-    build_bonus_history_strata,
-    build_bonus_lagged_panel,
-    build_bonus_transition_matrix,
     build_brand_distribution,
     build_brand_one_way,
     build_categorical_association,
@@ -60,11 +56,7 @@ from src.own_damage_descriptives import (
     build_severity_distribution_fit,
     build_severity_summary,
     build_year_trend_summary,
-    fit_bonus_timing_model,
     plot_age_diagnostics,
-    plot_bonus_change_summary,
-    plot_bonus_history_strata,
-    plot_bonus_transition_matrix,
     plot_brand_distribution,
     plot_brand_one_way,
     plot_categorical_association_heatmap,
@@ -660,89 +652,18 @@ assert age_diagnostics["plausibility"].loc["førerkortalder_over_føreralder", "
 # datadefinisjon; modellen får derfor ikke en påstått reell kjøretøyalder.
 
 # %% [markdown]
-# ## 18. Bonus_score: tidsplassering og informasjonsinnhold
+# ## 18. Bonus_score: foreløpig konklusjon
 #
-# `bonus_score` kan være verdifull prisinformasjon, men kildebeskrivelsen gir
-# ingen eksakt *as-of*-dato. Diagnosen nedenfor bruker derfor bare strengt
-# sammenhengende par (`t-1 → t`) i **train_pool**: ingen 2024-observasjoner
-# påvirker featurevurderingen. G < N < B brukes kun for å definere forbedring
-# og forverring; selve scoren skal fortsatt behandles kategorisk i en modell.
+# Den separate [bonusdiagnostikken](bonus_score_analysis.ipynb) tyder på at
+# `bonus_score` inneholder informasjon utover den eksplisitt observerte
+# ettårige skadehistorikken. Timingmønsteret er mest konsistent med at scoren
+# bygger på tidligere års skader, ikke inneværende års skadeutfall. Dette er
+# ikke et endelig bevis på leakage-fri timing fordi eksakt *as-of*-dato mangler.
 #
-# Dette er ikke kausal dokumentasjon og beviser verken leakage eller fravær av
-# leakage. Den undersøker om endringer er mer konsistente med laggede enn med
-# samtidige skader, og om scoren fortsatt skiller kaskofrekvens innen enkel,
-# eksplisitt observert ettårig skadehistorikk.
-
-# %%
-bonus_panel = build_bonus_lagged_panel(train_pool)
-bonus_transition = build_bonus_transition_matrix(bonus_panel)
-bonus_changes = build_bonus_change_summary(bonus_panel)
-display(
-    pd.Series(
-        {"Antall sammenhengende t-1 → t-par": len(bonus_panel)}, name="Verdi"
-    ).to_frame()
-)
-display(bonus_transition)
-display(plot_bonus_transition_matrix(bonus_transition))
-display(bonus_changes)
-display(plot_bonus_change_summary(bonus_changes))
-
-# %% [markdown]
-# Den multivariate timingtesten har forverring av bonus i t som utfall og
-# inkluderer både lagget og samtidig antall egen-skader og alle skader, med
-# kontroll for bonusklasse i t-1. Kalenderår tas med når det varierer; i den
-# leakage-sikre train-poolen finnes bare overgangen 2022 → 2023, så en
-# årseffekt kan ikke estimeres uten å åpne 2024-testen. Odds ratio over én betyr
-# høyere observert odds for bonusforverring, gitt de andre leddene. B er
-# dårligste klasse og kan definisjonsmessig ikke forverres; den holdes utenfor
-# dette risikosettet for å unngå perfekt separasjon, men vises fortsatt i
-# overgangsmatrisen. Dette er en stabilitetssjekk, ikke en kausal modell.
-
-# %%
-bonus_timing_effects, bonus_timing_diagnostics, bonus_timing_formula = (
-    fit_bonus_timing_model(bonus_panel)
-)
-display(bonus_timing_diagnostics)
-display(bonus_timing_effects)
-display(pd.Series({"Modellformel": bonus_timing_formula}, name="Verdi").to_frame())
-
-# %%
-lag_total_or = bonus_timing_effects.loc[
-    bonus_timing_effects["ledd"].eq("total_claims_lag"), "odds_ratio"
-].iloc[0]
-current_total_or = bonus_timing_effects.loc[
-    bonus_timing_effects["ledd"].eq("total_claims"), "odds_ratio"
-].iloc[0]
-timing_interpretation = pd.Series(
-    {
-        "Tolkning": (
-            f"I {int(bonus_timing_diagnostics.loc['sammenhengende_par_i_modell', 'Verdi']):,} "
-            f"par i risikosettet var odds ratio {lag_total_or:.2f} for én ekstra "
-            f"lagget totalskade, mot {current_total_or:.2f} for samtidig totalskade. "
-            "Sammen med intervallene i tabellen er dette konsistent med en lagget "
-            "tolkning, men ikke et bevis på leakage-fri timing."
-        )
-    },
-    name="Verdi",
-).to_frame()
-display(timing_interpretation)
-
-# %%
-bonus_history_strata = build_bonus_history_strata(bonus_panel)
-display(bonus_history_strata)
-display(plot_bonus_history_strata(bonus_history_strata))
-
-# %% [markdown]
-# **Beslutningsregel.** Dersom laggede skader er langt sterkere assosiert med
-# bonusforverring enn samtidige skader, støtter det en start-av-år/lagget
-# tolkning og `bonus_score` kan beholdes som en **betinget kandidat**. Hvis
-# scoren fortsatt skiller frekvens innen lagget skadehistorikk, kan den romme
-# eldre historikk eller underwriting-informasjon — men også uavklart timing.
-# Det er ikke bevis for leakage-fri bruk. Dersom samtidige skader dominerer
-# tydelig, ekskluderes scoren. Uansett skal senere modellering, kun innen
-# train/CV, sammenligne basis; basis + lagget historikk; basis + bonus; og
-# basis + begge, samt alltid rapportere en obligatorisk sensitivitetsmodell
-# uten bonus. Ingen av disse valgene skal bruke 2024-testen.
+# `bonus_score` beholdes foreløpig som kategorisk prediktorkandidat, men
+# vurderes på nytt i modelleringsfasen gjennom leakage-sikker sammenligning av
+# modeller med/uten bonus og med eksplisitt lagget historikk, bare i train/CV.
+# Teståret 2024 røres ikke.
 
 # %% [markdown]
 # ## 19. Prediktorer: univariate fordelinger
