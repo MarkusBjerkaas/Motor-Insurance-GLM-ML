@@ -1,9 +1,6 @@
 ﻿{
   "permissions": {
-    "defaultMode": "bypassPermissions",
-    "ask": [
-      "Bash(git commit *)"
-    ]
+    "defaultMode": "bypassPermissions"
   },
   "hooks": {
     "UserPromptSubmit": [

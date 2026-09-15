@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: 'defaultInterpreterPath: 3.12.14.final.0'
+#     display_name: MotorForsikring (3.12.x)
 #     language: python
 #     name: python3
 # ---
@@ -91,6 +91,30 @@ if not DATA_PATH.exists() or not DESCRIPTION_PATH.exists():
     )
 
 seed = 100
+
+# %% [markdown]
+# # Arbeidsantakelser og sentrale begrensninger
+#
+# Før den videre analysen gjør vi følgende eksplisitte antakelser:
+#
+# - **Skadebeløpene brukes som levert i datasettet.** Artikkelen dokumenterer ikke om `property_incurred` er inflasjonsjustert eller indeksert, hvilket basisår som eventuelt er brukt, eller hvilken
+# verdsettelsesdato beløpene gjelder. Vi foretar derfor ingen egen inflasjonsjustering og antar ikke at beløpene er indeksregulert.
+#
+# - **`property_incurred` behandles som beste tilgjengelige kostnadsmål, men ikke nødvendigvis som ultimate skadebeløp.** Artikkelen beskriver `incurred` som betalte beløp pluss utestående reserver, men gir ingen
+# full dokumentasjon av skadeutvikling eller IBNR. Se [artikkelen](https://pmc.ncbi.nlm.nih.gov/articles/PMC13234478/).
+#
+# - **IBNR antas å være mindre problematisk for egen-skade enn for ansvarsskade**, fordi egen-skader normalt har kortere rapporterings- og oppgjørstid. Dette er likevel en praktisk arbeidsantakelse, ikke noe som
+# kan verifiseres direkte fra datasettet.
+#
+# - **2024 behandles som et out-of-time-testsett for registrerte incurred-skader.** Publisering av datasettet i 2026 gjør det mulig at 2024-skadene er mer utviklet enn ved utgangen av 2024, men artikkelen oppgir
+# ikke datauttrekksdato eller at skadebeløpene er ferdig utviklet. Testresultatene må derfor tolkes som ytelse mot registrerte/påløpte skadebeløp i uttrekket, ikke nødvendigvis mot ultimate kostnader.
+#
+# - **Modellvalg og variabelseleksjon baseres på 2022–2023.** 2024 holdes av til endelig evaluering og brukes ikke til å velge modell eller variabler. Vi må samtidig erkjenne at aggregerte testutfall allerede er
+# synlige i den deskriptive analysen, slik at testsettet ikke lenger er fullstendig blindt.
+#
+# Disse antakelsene er en nødvendig forenkling for prosjektet. De innebærer at vi ikke tolker årseffekter som ren skadeinflasjon, og at vi omtaler resultatene som betinget på skadeutviklingen som foreligger i
+# datasettet.
+#
 
 # %% [markdown]
 # ## 1. Uendret innlasting og første inspeksjon
@@ -409,8 +433,6 @@ display(overlap_summary)
 check_group_disjoint_folds(train_pool, cv, train_pool["insured_id"])
 
 # %% [markdown]
-#
-# %% [markdown]
 # # Deskriptiv analyse av modellvariablene
 #
 # Alt fra dette punktet bruker **kun `train_pool`** (2022-2023), i tråd med
@@ -419,7 +441,7 @@ check_group_disjoint_folds(train_pool, cv, train_pool["insured_id"])
 # å ha forklaringskraft, før modellspesifikasjon. `test` (2024) holdes urørt.
 
 # %% [markdown]
-# ## 13. Skadeantall: fordeling og overspredning
+# ## 13. Frekvens: fordeling og overspredning
 #
 # Fordelingen av `property_claims` viser hvor konsentrert skadeutfallet er
 # (de fleste poliseår har 0 skader). Spredningsforholdet (varians/snitt)
@@ -482,6 +504,8 @@ display(plot_severity_distribution(train_pool, severity_fit))
 # med log-link antar **ikke** lognormalitet. Formelle normalitetstester ved stort
 # n avviser ofte små avvik og skal ikke velge modell alene; Q-Q, haletilpasning
 # og senere out-of-sample deviance/kalibrering veier tyngre.
+#
+# Lognormal fordelingen bommer fremdeles betydelig i halen. Dette motiverer en vurdering av å modellere storskader og 
 
 # %% [markdown]
 # ## 15. Ren premie (severity × frekvens)
@@ -717,7 +741,6 @@ display(plot_one_way_grid(numeric_one_way, train_pool, "numeriske"))
 
 # %%
 brand_one_way = build_brand_one_way(train_pool)
-display(brand_one_way)
 display(plot_brand_one_way(brand_one_way, train_pool))
 
 # %% [markdown]
@@ -740,3 +763,196 @@ display(plot_categorical_association_heatmap(association_matrix))
 
 # %%
 display(plot_numeric_by_category_boxplot(train_pool, "log_vehicle_value", "policy_type"))
+
+# %%
+df['property_claims'].unique()
+
+# %% [markdown]
+# # 23. Oppsummering og konsekvenser for modelleringen
+#
+# ## Hva analysen samlet sett viser
+#
+# Analysen gir et godt nok grunnlag til å gå videre med en første modell for
+# egen skade, men ikke til å låse endelig modell eller endelig variabelsett.
+# Modellpopulasjonen består av 56 084 poliseår i 2022–2023, tilsvarende
+# 37 904 eksponeringsår, 37 727 unike forsikringstakere og 10 126 skader.
+# Datamengden er stor nok for ordinære GLM-er og noen kontrollerte, ikke-lineære
+# effekter. Den er likevel ikke stor i alle undergrupper: særlig CC, sjeldne
+# bilmerker, manglende-kategorier og eventuelle interaksjoner må behandles
+# forsiktig.
+#
+# Egen-skadedekningen utgjør omtrent 31 % av eksponeringen i hele porteføljen og
+# finnes bare for CC, COMP_E og COMP_N. I train-poolen dominerer COMP_E med
+# 81,3 % av eksponeringen, mens COMP_N har 16,6 % og CC 2,1 %. Produktforskjellen
+# er viktig: observert skadefrekvens er omtrent 0,18 for CC og COMP_E, men 0,69
+# for COMP_N. Dette kan skyldes både risiko, egenandel og hvordan skader
+# registreres. `policy_type` må derfor være med fra starten; den er mer enn en
+# vanlig kontrollvariabel og beskriver ulike forsikringsvilkår.
+#
+# Skadeutfallet er nulltungt og høyreskjevt:
+#
+# - 89,7 % av poliseårene har ingen registrert skade.
+# - Gjennomsnittlig skadeantall per rad er 0,181, mens variansen er 0,468
+#   (rått varians/gjennomsnitt = 2,59).
+# - Blant de 5 778 poliseårene med skade er uvektet gjennomsnittlig severity
+#   1 059 EUR, medianen 617 EUR, p99 7 973 EUR og maksimum 27 333 EUR.
+# - Porteføljens eksponeringsvektede frekvens er 0,267 skader per poliseår og
+#   samlet ren premie er omtrent 232 EUR per eksponeringsår.
+# - Ren premie per enkelt rad har en ekstrem hale. Maksimum på 1,19 mill. EUR
+#   er en annualisert rate fra en skade på en svært kort eksponering, ikke en
+#   skade på 1,19 mill. EUR. Slike rater må derfor ikke tolkes som skadebeløp
+#   eller brukes til mekanisk trimming.
+# - Bare omtrent en tredel av radene har fullårseksponering. Korrekt offset og
+#   vekting er derfor avgjørende; radantall er ikke det samme som risikovolum.
+#
+# Det rå spredningsforholdet er et tydelig varsel om at en enkel Poisson-modell
+# kan bli for snever, men det beviser ikke at negativ binomial er nødvendig.
+# Beregningen er ujustert for ulik eksponering og ulik risikosammensetning.
+# Dette avgjøres først etter at en Poisson-GLM med korrekt offset og sentrale
+# risikofaktorer er tilpasset, ved å undersøke residualdispersjon, kalibrering
+# og ytelse utenfor tilpasningsdataene. Den store nullandelen er heller ikke i
+# seg selv grunnlag for en nullinflasjonsmodell.
+#
+# Severity og positiv ren premie passer beskrivende bedre til lognormal enn til
+# Gamma målt med AIC, men ingen av fordelingene beskriver halen perfekt, og
+# lognormalitet avvises klart. Sammenligningen er dessuten gjort på
+# gjennomsnittlig skade per poliseår, ikke på individuelle skader. Den sier
+# derfor lite om hvilken GLM som predikerer forventet kostnad best. Gamma med
+# log-link er fortsatt et naturlig startpunkt for severity, med skadeantall som
+# vekt når responsen er `property_incurred / property_claims`. Lognormal kan
+# brukes som en utfordrermodell. De ni skadeårene med null eller praktisk talt
+# null incurred må avklares og kan ikke inngå uendret i en Gamma-modell.
+#
+# Fra 2022 til 2023 øker frekvensen fra 0,235 til 0,282 (omtrent 20 %), severity
+# faller fra 935 til 843 EUR (omtrent 10 %), og ren premie øker fra 220 til
+# 238 EUR (omtrent 8 %). Dette kan være en reell tidseffekt, men også skyldes
+# endret porteføljemiks, skadeoppgjørsmodning eller tilfeldig variasjon.
+# Kalenderår kan brukes som kategorisk kontroll eller til senere rekalibrering;
+# det er **ikke** en offset. To treningsår er for lite til å estimere en stabil
+# lineær trend eller skadeinflasjon.
+#
+# ## Implikasjoner for variabelvalg
+#
+# One-way-analysene viser flere plausible kandidater, men er ikke kausale og
+# skal ikke brukes som en automatisk utvelgelsesregel. Effektene kan endres når
+# variablene vurderes samtidig.
+#
+# - **Høy prioritet:** `policy_type` har klart størst produktmessig betydning.
+#   `bonus_score` har en sterk, monoton gradient i frekvens og ren premie
+#   (omtrent 224, 351 og 567 EUR for G, N og B), men tas bare med dersom
+#   tidspunktet for fastsettelsen kan dokumenteres som leakage-fritt.
+# - **Kjøretøy:** Ren premie stiger tydelig med `log_vehicle_value` og
+#   `performance_hp_per_tonne`, særlig i øverste intervall. Begge bør prøves som
+#   kontinuerlige, fleksible ledd, for eksempel splines. Korrelasjonen på 0,56
+#   betyr at stabilitet og marginalt bidrag må kontrolleres når begge er med.
+# - **Alder og erfaring:** `driver_age` og `driving_experience_years` har
+#   korrelasjon 0,88 og bør ikke uten videre inngå som to lineære hovedledd.
+#   Alder viser tegn til en ikke-lineær effekt, med høyere frekvens blant de
+#   eldste. Sammenlign fleksible aldersledd med en alternativ
+#   erfaringsspesifikasjon i CV. `driver_age` er den sikreste hovedkandidaten
+#   fordi den utledede erfaringen bygger på en ikke fullt verifisert
+#   datatolkning.
+# - **Geografi og kontrakt:** Diesel, urbant område, innland, kvartalsbetaling
+#   og eksisterende portefølje har høyere observerte rater enn
+#   sammenligningsgruppene. De er relevante kandidater, men forskjellene kan
+#   være sammensetningseffekter. Det må også avklares at alle feltene er kjent
+#   på prisingsdatoen og er akseptable tariffkriterier.
+# - **Bilmerke:** Poolingen er leakage-sikker og beholder 17 merker som dekker
+#   88,5 % av train-eksponeringen. One-way-ratene varierer, men merke henger
+#   sammen med blant annet verdi og ytelse. Behold pooled merke som kandidat,
+#   og krev dokumentert forbedring og stabile effekter i CV fremfor å tolke de
+#   rå merkeratene direkte. Terskelen på 500 eksponeringsår bør også
+#   sensitivitetskontrolleres.
+# - **Lavere prioritet:** `seats` viser liten og lite entydig separasjon og kan
+#   være en tidlig kandidat for utelatelse dersom den ikke tilfører verdi i en
+#   multivariat modell. Lav one-way-effekt alene er likevel ikke nok til å
+#   forkaste variabelen.
+# - **Skal ikke brukes nå:** `vehicle_age` har feil eller uklar betydning og
+#   utelates. Rå `age_driving_licence` bør heller ikke brukes ved siden av
+#   utledet erfaring. Premier, skadeutfall, `insured_id` og informasjon som
+#   først oppstår etter prisingsdatoen skal aldri brukes som risikoprediktorer.
+#   `policy_status` holdes utenfor inntil det er dokumentert om statusen er kjent
+#   ved periodens start; den sterke rå raten for kansellerte poliser kan skyldes
+#   kort eksponering eller informasjon som oppstår i løpet av året.
+#
+# Manglendeverdiene er få, men ikke nødvendigvis tilfeldige. Manglende
+# `fuel_type` (439 rader) og `vehicle_value` (33 rader) har høyere observert
+# frekvens enn komplette rader, men gruppene er små. Bruk en eksplisitt og
+# reproducerbar manglende-strategi som læres i hver CV-fold, og sørg for at
+# produksjonspipelinen håndterer manglende verdier og nye kategorier selv om de
+# ikke forekom i akkurat denne train-poolen.
+#
+# ## Anbefalt første modelleringsløp
+#
+# 1. Tilpass en enkel Poisson-frekvensmodell med `log(total_exposure)` som
+#    offset og et lite, forhåndsdefinert sett av hovedledd. Sammenlign deretter
+#    med negativ binomial på samme valideringsoppsett.
+# 2. Tilpass en Gamma-severitymodell med log-link på positive skadebeløp, der
+#    gjennomsnittlig severity vektes med antall skader. Sammenlign med en
+#    lognormal utfordrer og undersøk kalibrering i halen.
+# 3. Multipliser frekvens- og severityprediksjonene til forventet ren premie,
+#    og sammenlign denne todelte modellen med en Tweedie-GLM på ren premie med
+#    eksponering som vekt.
+# 4. Legg til variabler i faglig begrunnede blokker. Velg kompleksitet etter
+#    forbedring i out-of-fold deviance og kalibrering, samt fortegn og stabilitet
+#    på tvers av foldene — ikke bare p-verdier eller one-way-rater.
+# 5. Evaluer både samlet og innen viktige segmenter, spesielt `policy_type`,
+#    år, nytegning/fornyelse og store/små predikerte risikoer. Rapporter
+#    eksponeringsvektet kalibrering, deviance og rangering/lift.
+#
+# `GroupKFold` beskytter mot at samme `insured_id` havner på begge sider av en
+# tilfeldig CV-fold, men tester ikke ren fremoverskuende generalisering. Med de
+# tilgjengelige årene bør den suppleres med en sensitivitetsanalyse der 2022
+# brukes til trening og 2023 til validering. Det er bare én slik tidsfold, så
+# resultatet må tolkes med forsiktighet. Dersom koeffisientusikkerhet skal
+# rapporteres, bør standardfeilene også ta hensyn til at samme forsikringstaker
+# kan forekomme i flere år, for eksempel ved clustering på `insured_id`.
+#
+# ## Må undersøkes grundigere før endelig modellering
+#
+# Følgende er reelle avklaringspunkter, ikke bare ønskelige tillegg:
+#
+# - **Skademodning og prisnivå:** Finn verdsettelsesdato og kontroller om
+#   `incurred` er like modent for alle år. Uten dette kan årsforskjeller og den
+#   endelige testen blande modellfeil med etterslep i reserver. Avklar også om
+#   beløpene skal inflasjonsjusteres til samme prisnivå.
+# - **Egen-skadedekning:** Positiv premie er bare en proxy for aktiv dekning.
+#   De to egen-skadesakene med null egen-skadepremie må undersøkes, og
+#   dekningsregelen bør valideres mot produktvilkår eller et faktisk
+#   dekningsflagg. Ellers kan modellpopulasjonen være selektert feil. I tillegg
+#   kjøres unntakskontrollen i seksjon 11 på det allerede filtrerte `df`, slik
+#   at den tomme unntakstabellen er sann per konstruksjon og ikke validerer hva
+#   som falt utenfor. Kontrollen må kjøres på `data` før filteret anvendes.
+# - **Eksponering og kansellering:** Kontroller frekvens og datakvalitet særskilt
+#   for svært korte eksponeringer og kansellerte poliser. Avklar om skader kan
+#   påvirke opphørstidspunkt/status. Den ekstreme annualiserte renpremien viser
+#   hvorfor dette er viktig.
+# - **Nullkostnadsskader og mange skader:** Undersøk de ni skadeårene med null
+#   eller nær-null incurred og poliseårene med svært mange skader (opptil 15).
+#   Avklar om dette er reelle nullskader, reserveringsstatus, dubletter eller en
+#   aggregert registreringspraksis.
+# - **Holdout-disiplin:** 2024 er omtalt som urørt test, men seksjon 12 viser
+#   allerede skadeantall, skadeandel og incurred for 2024. Holdout-resultatet er
+#   derfor ikke helt blindt. Lås nå modellvalg og akseptansekriterier basert på
+#   2022–2023, og ikke bruk flere 2024-utfall før én samlet sluttevaluering.
+# - **Porteføljedrift:** Sammenlign prediktor- og eksponeringsfordelinger mellom
+#   2022, 2023 og 2024 uten å bruke 2024-skadeutfall. Sjekk særlig produktmiks,
+#   nytegning/fornyelse, bonus, bilverdi, ytelse og andel korte eksponeringer.
+# - **Bonus-timing:** Skaff en presis *as-of*-definisjon. Hvis den ikke finnes,
+#   bør hovedresultatet vises både med og uten `bonus_score`; eksplisitt lagget
+#   skadehistorikk må håndtere nytegning og manglende historikk separat.
+# - **Påvirkningsanalyse:** Undersøk om et lite antall store skader driver
+#   segmenteffekter og årsforskjeller. Vis resultater med robuste
+#   sensitivitetsanalyser, men ikke kapp eller slett store skader uten en
+#   aktuarfaglig begrunnelse.
+# - **Usikkerhet i one-way-rater:** Frekvensintervallene er bare omtrentlige,
+#   mens severity og ren premie mangler intervaller. Bruk gjerne bootstrap med
+#   resampling på `insured_id` for å skille stabile mønstre fra tilfeldig støy,
+#   særlig for små segmenter og bilmerker.
+#
+# Kort sagt: Start med transparente GLM-baseliner og et begrenset sett av
+# faglig begrunnede variabler. De sterkeste kandidatene er produkt,
+# bonus (dersom timing er trygg), kjøretøyverdi, ytelse, et fleksibelt aldersledd
+# og noen få geografiske/kontraktsmessige faktorer. Den største risikoen nå er
+# ikke mangel på modellkompleksitet, men uklar skade- og variabeltiming,
+# skademodning, dekningsdefinisjon og at 2024-holdouten allerede er delvis sett.
