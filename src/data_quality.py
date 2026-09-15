@@ -7,7 +7,6 @@ reglene ligger her, mens tabellene vises i ``analysis.py``.
 import numpy as np
 import pandas as pd
 
-
 _VARIABLE_ROWS = [
     ("insured_id", "Polise og kontrakt", "Anonym, sekvensiell identifikator for en polise. Samme ID kan forekomme i flere kalenderår.", "ID; ingen måleenhet", "Nøkkel, skal ikke brukes direkte som prediktor", "Int32", "Nei"),
     ("year", "Polise og kontrakt", "Kalenderåret som poliseobservasjonen gjelder.", "2022, 2023 eller 2024", "Tidsindeks", "Int16", "Nei"),
@@ -17,8 +16,8 @@ _VARIABLE_ROWS = [
     ("payment_frequency", "Polise og kontrakt", "Avtalt betalingsfrekvens for premien.", "A=årlig; S=halvårlig; Q=kvartalsvis", "Kategorisk kontraktsinformasjon", "category", "Nei"),
     ("bonus_score", "Polise og kontrakt", "Grov klassifisering av forsikringstakerens tidligere skadeerfaring.", "G=god; N=nøytral; B=dårlig skadehistorikk", "Kategorisk/ordinal risikofaktor", "category", "Nei"),
     ("driver_age", "Fører og kjøretøy", "Alder på hovedføreren som er registrert på polisen.", "Hele år", "Numerisk risikofaktor", "Int16", "Nei"),
-    ("vehicle_age", "Fører og kjøretøy", "Alder på det forsikrede kjøretøyet.", "Hele år", "Numerisk risikofaktor", "Int16", "Ja"),
-    ("age_driving_licence", "Fører og kjøretøy", "Kalenderåret da poliseholderen fikk førerkort.", "Årstall", "Numerisk risikofaktor", "Int16", "Ja"),
+    ("vehicle_age", "Fører og kjøretøy", "Kildens dokumentasjon kaller feltet kjøretøyalder, men dataene er nesten identiske med utledet førerkortansiennitet. Behandles derfor kun som uavklart diagnostisk felt; reell kjøretøyalder er utilgjengelig.", "Hele år ifølge kilden; observert tolkning er førerkortansiennitet", "Uavklart diagnostisk felt", "Int16", "Ja"),
+    ("age_driving_licence", "Fører og kjøretøy", "Kildedokumentasjonen er selvmotsigende. Dataene indikerer svært sterkt at feltet er alder ved førerkorterverv, ikke kalenderår eller ansiennitet. Dette er en arbeidshypotese, ikke bevist uten publisert transformasjonskode.", "Alder i hele år (observert tolkning/arbeidshypotese)", "Numerisk risikofaktor", "Int16", "Ja"),
     ("fuel_type", "Fører og kjøretøy", "Drivstofftype for kjøretøyet.", "D=diesel; G=bensin", "Kategorisk risikofaktor", "category", "Ja"),
     ("vehicle_value", "Fører og kjøretøy", "Oppgitt forsikringsverdi for kjøretøyet. Artikkelen bruker euro i premiepresentasjonen, men variabelarket oppgir ikke valuta eksplisitt for dette feltet.", "Beløp; valuta ikke eksplisitt angitt i variabelarket", "Numerisk risikofaktor", "float64", "Ja"),
     ("seats", "Fører og kjøretøy", "Antall registrerte sitteplasser i kjøretøyet.", "Heltallsantall", "Numerisk risikofaktor", "Int16", "Nei"),
@@ -207,7 +206,7 @@ def run_integrity_checks(frame, variable_dictionary):
         ("Gyldig vekt/effekt-forhold", "Kritisk", "power_to_weight_ratio > 0 eller manglende", frame["power_to_weight_ratio"].notna() & frame["power_to_weight_ratio"].le(0)),
         ("Gyldig antall seter", "Kritisk", "seats er positivt heltall", frame["seats"].le(0)),
         ("Plausibel føreralder", "Kritisk", "driver_age i [18, 100]", ~frame["driver_age"].between(18, 100)),
-        ("Ikke-negativ førerkortansiennitet", "Kritisk", "age_driving_licence >= 0 eller manglende", frame["age_driving_licence"].notna() & frame["age_driving_licence"].lt(0)),
+        ("Ikke-negativ observert førerkortalder", "Kritisk", "age_driving_licence >= 0 eller manglende; tolkningen valideres separat som arbeidshypotese", frame["age_driving_licence"].notna() & frame["age_driving_licence"].lt(0)),
         ("Positiv ansvarseksponering med null ansvarspremie", "Undersøk", "Eksponeringen beholdes; null premie ved positiv totalpremie må avklares før premieanalyse", frame["liability_exposure"].gt(0) & frame["liability_premium"].eq(0) & frame["total_premium"].gt(0)),
         ("Skade eller incurred ved null eksponering", "Undersøk", "Null eksponering forventes normalt uten skadeaktivitet", frame["total_exposure"].eq(0) & (frame["total_claims"].gt(0) | frame["total_incurred"].gt(0))),
         ("Positiv incurred uten registrert skade", "Undersøk", "total_claims = 0 forventes normalt å gi total_incurred = 0", frame["total_claims"].eq(0) & frame["total_incurred"].gt(0)),

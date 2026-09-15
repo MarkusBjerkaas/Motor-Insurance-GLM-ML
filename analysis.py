@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: MotorForsikring (3.12.x)
+#     display_name: 'defaultInterpreterPath: 3.12.14.final.0'
 #     language: python
 #     name: python3
 # ---
@@ -22,6 +22,7 @@
 # %%
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from IPython.display import display
 from sklearn.model_selection import GroupKFold
@@ -37,6 +38,47 @@ from src.data_quality import (
     find_variables,
     run_integrity_checks,
 )
+from src.own_damage_descriptives import (
+    CATEGORICAL_VARS,
+    NUMERIC_VARS,
+    build_age_diagnostics,
+    build_bonus_change_summary,
+    build_bonus_history_strata,
+    build_bonus_lagged_panel,
+    build_bonus_transition_matrix,
+    build_brand_distribution,
+    build_brand_one_way,
+    build_categorical_association,
+    build_categorical_one_way,
+    build_claim_count_distribution,
+    build_missingness_outcome_comparison,
+    build_numeric_correlation,
+    build_numeric_one_way,
+    build_overdispersion_summary,
+    build_pure_premium_distribution_fit,
+    build_pure_premium_summary,
+    build_severity_distribution_fit,
+    build_severity_summary,
+    build_year_trend_summary,
+    fit_bonus_timing_model,
+    plot_age_diagnostics,
+    plot_bonus_change_summary,
+    plot_bonus_history_strata,
+    plot_bonus_transition_matrix,
+    plot_brand_distribution,
+    plot_brand_one_way,
+    plot_categorical_association_heatmap,
+    plot_categorical_predictor_bars,
+    plot_claim_count_distribution,
+    plot_missingness_summary,
+    plot_numeric_by_category_boxplot,
+    plot_numeric_correlation_heatmap,
+    plot_numeric_predictor_histograms,
+    plot_one_way_grid,
+    plot_pure_premium_distribution,
+    plot_severity_distribution,
+    plot_year_trend,
+)
 from src.portfolio_visuals import (
     plot_exposure_structure,
     plot_policy_type_composition,
@@ -45,7 +87,7 @@ from src.pre_split_diagnostics import (
     build_own_damage_scope_validation,
     build_pre_split_diagnostics,
 )
-from src.train_test_split import build_key_variable_balance, build_split_summary
+from src.train_test_split import build_split_summary
 
 pd.set_option("display.max_columns", 60)
 pd.set_option("display.max_colwidth", 120)
@@ -138,8 +180,12 @@ raw_data[raw_data["power_to_weight_ratio"] <= 0].head()
 # Følgende beslutninger gjelder dette datasettet:
 #
 # - `power_to_weight_ratio <= 0` settes til manglende. Tre rader omfattes.
-# - `age_driving_licence` tolkes som antall år poliseholderen har hatt førerkort.
-#   Verdier under 18 er derfor ikke et datakvalitetsavvik.
+# - Kildedokumentasjonen for `age_driving_licence` og `vehicle_age` er
+#   selvmotsigende. Arbeidshypotesen, som testes eksplisitt i seksjon 17, er at
+#   `age_driving_licence` er alder ved førerkorterverv og at `vehicle_age` i
+#   praksis er førerkortansiennitet. Dette er ikke endelig bevist siden
+#   transformasjonskoden ikke er publisert. Reell kjøretøyalder behandles derfor
+#   som utilgjengelig og `vehicle_age` brukes ikke som modellprediktor.
 # - En kansellert polise med full eksponering beholdes uendret.
 # - Skader med null `incurred` beholdes som nullskader.
 # - Polise `(insured_id=23744, year=2022)` har en ansvarsskade, men null
@@ -304,17 +350,15 @@ display(scope_exceptions)
 assert df["property_damage_premium"].gt(0).all()
 assert df["total_exposure"].gt(0).all()
 
+# %%
+# Som vi ser inneholder kun datasettet de forventede polisetypene etter avgrensningen.
+df['policy_type'].unique()
+
 # %% [markdown]
 # Valideringen viser hvordan avgrensningen fordeler seg på produkttype og lister
 # alle skader som faller utenfor regelen. Slike unntak beholdes som dokumenterte
 # datavvik, men brukes ikke til å definere dekning fordi det ville innebære at
 # skadeutfallet bestemmer modellpopulasjonen.
-
-# %%
-df.loc[(df["total_exposure"]) != (df["liability_exposure"])]
-
-# %%
-df.head()
 
 # %% [markdown]
 # ## 12. Train/test-splitt
@@ -373,20 +417,405 @@ display(overlap_summary)
 check_group_disjoint_folds(train_pool, cv, train_pool["insured_id"])
 
 # %% [markdown]
-# ### Balansediagnostikk: nøkkelvariabler i train/CV-pool vs. test
 #
-# Splitten er tidsbasert, ikke tilfeldig, så det er ikke gitt at fordelingen av
-# sentrale risikofaktorer er lik i de to periodene. Tabellene under viser andel
-# per kategori (kategoriske variabler) og standardized mean difference, SMD
-# (numeriske variabler) mellom train/CV-pool og test. Store avvik er ikke i seg
-# selv et problem — testsettet skal representere fremtidige fornyelser, ikke en
-# tilfeldig delmengde av samme populasjon — men avvik bør være kjent før
-# modellresultater tolkes.
+# %% [markdown]
+# # Deskriptiv analyse av modellvariablene
+#
+# Alt fra dette punktet bruker **kun `train_pool`** (2022-2023), i tråd med
+# beslutningen i seksjon 12. Formålet er å forstå frekvens, severity og ren
+# premie for egen skade, og å identifisere hvilke prediktorer som ser ut til
+# å ha forklaringskraft, før modellspesifikasjon. `test` (2024) holdes urørt.
+
+# %% [markdown]
+# ## 13. Skadeantall: fordeling og overspredning
+#
+# Fordelingen av `property_claims` viser hvor konsentrert skadeutfallet er
+# (de fleste poliseår har 0 skader). Spredningsforholdet (varians/snitt)
+# avgjør om Poisson (forhold ≈ 1) er en rimelig antakelse for frekvensmodellen,
+# eller om overspredning krever negativ binomial.
 
 # %%
-categorical_balance, numeric_balance = build_key_variable_balance(train_pool, test)
-display(categorical_balance)
-display(numeric_balance)
+claim_distribution = build_claim_count_distribution(train_pool)
+display(claim_distribution)
+display(plot_claim_count_distribution(claim_distribution))
 
 # %%
-cv
+display(build_overdispersion_summary(train_pool))
+
+# %% [markdown]
+# ## Implikasjoner:
+# Variansen avviker betydelig fra gjennomsnittet og stemmer ikke overens med poisson fordeling. Undersøker videre om negativ binomialfordeling er mer egnet.
+
+# %% [markdown]
+# ## 14. Severity
+#
+# Severity (`property_incurred / property_claims`, kun poliseår med skade)
+# er beregnet per poliseår, ikke per skademelding — ved flere skader i samme
+# poliseår er tallet et gjennomsnitt. Gamma og lognormal sammenlignes med MLE
+# og AIC på den strengt positive, **uvektede** delen; dette er en deskriptiv
+# density-fit, ikke et endelig severitymodellvalg. Null-severity vises
+# eksplisitt og inngår ikke i den kontinuerlige fitten. For
+# fordelingsdiagnostikken behandles beløp med absoluttverdi ≤ 0,01 som numerisk
+# null (én cent, gitt kildens EUR-presentasjon); rådata og sammendrag endres
+# ikke. En eventuell
+# claim-count-vektet fit ville besvare et annet spørsmål enn fordelingen av
+# aggregerte poliseår og overlates til senere modellering.
+
+# %%
+display(build_severity_summary(train_pool))
+severity_fit = build_severity_distribution_fit(train_pool)
+display(severity_fit)
+display(
+    pd.Series(
+        {
+            "Numerisk nulltoleranse i fordelingsdiagnostikk": severity_fit.attrs["zero_tolerance"],
+            "Eksakte null-severity": severity_fit.attrs["exact_zero_count"],
+            "Nærnuller klassifisert som null kun i diagnostikk": severity_fit.attrs["near_zero_count"],
+            "Minste substantielle positive severity": (
+                train_pool.loc[train_pool["property_claims"].gt(0), "property_incurred"]
+                .div(train_pool.loc[train_pool["property_claims"].gt(0), "property_claims"])
+                .loc[lambda values: values.gt(severity_fit.attrs["zero_tolerance"])]
+                .min()
+            ),
+            "Normalitetstest for log(severity), statistikk": severity_fit.attrs["normality_stat"],
+            "Normalitetstest for log(severity), p-verdi": severity_fit.attrs["normality_pvalue"],
+        },
+        name="Verdi",
+    ).to_frame()
+)
+display(plot_severity_distribution(train_pool, severity_fit))
+
+# %% [markdown]
+# Q-Q-panelet er relevant bare dersom lognormalfordeling vurderes. En Gamma GLM
+# med log-link antar **ikke** lognormalitet. Formelle normalitetstester ved stort
+# n avviser ofte små avvik og skal ikke velge modell alene; Q-Q, haletilpasning
+# og senere out-of-sample deviance/kalibrering veier tyngre.
+
+# %% [markdown]
+# ## 15. Ren premie (severity × frekvens)
+#
+# Ren premie er `property_incurred / total_exposure` per poliseår — kombinerer
+# frekvens og severity, og er størrelsen en Tweedie-modell til slutt skal
+# predikere. Den har punktmasse i null (ingen skade) og en kontinuerlig,
+# skjev hale for poliseår med kostnad. Gamma og lognormal sammenlignes kun for
+# den positive delen med MLE/AIC; ingen observasjoner slettes, og absolutt-
+# panelet begrenses transparent til p99 bare for lesbarhet.
+
+# %%
+display(build_pure_premium_summary(train_pool))
+pure_premium_fit = build_pure_premium_distribution_fit(train_pool)
+display(pure_premium_fit)
+display(
+    pd.Series(
+        {
+            "Numerisk nulltoleranse i fordelingsdiagnostikk": pure_premium_fit.attrs["zero_tolerance"],
+            "Eksakte nuller i ren premie": pure_premium_fit.attrs["exact_zero_count"],
+            "Nærnuller klassifisert som null kun i diagnostikk": pure_premium_fit.attrs["near_zero_count"],
+            "Minste substantielle positive ren premie": (
+                train_pool["property_incurred"] / train_pool["total_exposure"]
+            ).loc[lambda values: values.gt(pure_premium_fit.attrs["zero_tolerance"])]
+            .min(),
+            "Normalitetstest for log(positiv ren premie), statistikk": pure_premium_fit.attrs["normality_stat"],
+            "Normalitetstest for log(positiv ren premie), p-verdi": pure_premium_fit.attrs["normality_pvalue"],
+        },
+        name="Verdi",
+    ).to_frame()
+)
+display(plot_pure_premium_distribution(train_pool, pure_premium_fit))
+
+# %% [markdown]
+# Den samlede renpremiefordelingen har punktmasse i null og er aktuarielt mer
+# forenlig med compound Poisson–Gamma/Tweedie enn én kontinuerlig Gamma- eller
+# lognormalfordeling. AIC-valget over beskriver derfor bare den betinget
+# positive delen og erstatter ikke senere out-of-sample modellkontroll.
+
+# %% [markdown]
+# ## 16. Tidstrend i train_pool (2022 vs. 2023)
+#
+# Kun to år tilgjengelig i train_pool, men en sjekk av om frekvens/severity
+# endrer seg mellom dem er relevant for om `year` bør inn som prediktor/offset,
+# eller om skadeinflasjon bør vurderes separat.
+
+# %%
+year_trend = build_year_trend_summary(train_pool)
+display(year_trend)
+display(plot_year_trend(year_trend))
+
+# %% [markdown]
+# ## 17. Transparente transformasjoner og aldersdiagnostikk
+#
+# De publiserte kildene er selvmotsigende: variabelarket omtaler
+# `age_driving_licence` som kalenderår, mens observerte verdier og de
+# longitudinelle mønstrene er uforenlige med det. Arbeidshypotesen her er at
+# feltet er **alder ved førerkorterverv**. Da blir
+# `driving_experience_years = driver_age - age_driving_licence`, og
+# `vehicle_age` er nesten det samme målet. Dette taler for at `vehicle_age`
+# feilaktig representerer førerkortansiennitet, ikke reell kjøretøyalder.
+#
+# Hypotesen er svært godt støttet av data, men ikke endelig bevist: publisert
+# transformasjonskode mangler. Reell kjøretøyalder behandles derfor som
+# utilgjengelig. `vehicle_age` brukes bare i diagnosen nedenfor og aldri sammen
+# med den utledede erfaringen som modellprediktor.
+
+# %%
+display(
+    source_dictionary_raw.loc[
+        source_dictionary_raw["Variables"].isin(
+            ["driver_age", "age_driving_licence", "vehicle_age"]
+        )
+    ]
+)
+display(
+    variable_dictionary.loc[
+        variable_dictionary["variable"].isin(
+            ["driver_age", "age_driving_licence", "vehicle_age"]
+        )
+    ]
+)
+
+# %% [markdown]
+# Transformasjonene under er forhåndsbestemte og bruker ingen skadeutfall.
+# Merke-poolingen læres utelukkende fra eksponering i `train_pool`: nivåer med
+# minst 500 eksponeringsår beholdes, mens øvrige og hittil usette merker får
+# `OTHER`. Den samme regelen brukes på testsettet. Eksponering er bare vekt/
+# offset i rateberegningene, aldri en prediktor. `performance_hp_per_tonne =
+# 1000 / power_to_weight_ratio` snur kildens kg-per-hk-mål: høyere verdi betyr
+# flere hestekrefter per tonn og dermed høyere ytelse. Bare positive inputverdier
+# transformeres; manglende input forblir manglende.
+
+# %%
+BRAND_MIN_EXPOSURE = 500.0
+brand_exposure_train = train_pool.groupby("vehicle_brand", observed=True)[
+    "total_exposure"
+].sum()
+retained_brands = brand_exposure_train.loc[
+    brand_exposure_train.ge(BRAND_MIN_EXPOSURE)
+].index.astype(str)
+
+
+def add_transparent_predictors(frame, retained_brand_levels):
+    """Legg til kun forhåndsdefinerte, ikke-responsbaserte prediktorer."""
+    transformed = frame.copy()
+    transformed["driving_experience_years"] = (
+        transformed["driver_age"] - transformed["age_driving_licence"]
+    )
+    transformed["log_vehicle_value"] = np.log(transformed["vehicle_value"])
+    transformed["performance_hp_per_tonne"] = 1000 / transformed[
+        "power_to_weight_ratio"
+    ]
+    observed_brand = transformed["vehicle_brand"].astype("string")
+    transformed["vehicle_brand_pooled"] = observed_brand.where(
+        observed_brand.isin(retained_brand_levels), "OTHER"
+    ).astype("category")
+    return transformed
+
+
+train_pool = add_transparent_predictors(train_pool, retained_brands)
+test = add_transparent_predictors(test, retained_brands)
+assert train_pool["driving_experience_years"].ge(0).all()
+assert test["vehicle_brand_pooled"].isin([*retained_brands, "OTHER"]).all()
+assert train_pool.loc[
+    train_pool["power_to_weight_ratio"].notna(), "power_to_weight_ratio"
+].gt(0).all()
+assert train_pool["performance_hp_per_tonne"].isna().eq(
+    train_pool["power_to_weight_ratio"].isna()
+).all()
+unseen_test_brands = set(test["vehicle_brand"].astype(str)) - set(
+    train_pool["vehicle_brand"].astype(str)
+)
+assert test.loc[
+    test["vehicle_brand"].astype(str).isin(unseen_test_brands),
+    "vehicle_brand_pooled",
+].eq("OTHER").all()
+feature_summary = pd.Series(
+    {
+        "Merker beholdt ved minst 500 eksponeringsår": len(retained_brands),
+        "Andel train-eksponering i beholdte merker (%)": (
+            brand_exposure_train.loc[retained_brands].sum()
+            / brand_exposure_train.sum()
+            * 100
+        ),
+        "Testmerker mappet til OTHER": int(test["vehicle_brand_pooled"].eq("OTHER").sum()),
+        "Usette testmerker mappet til OTHER": len(unseen_test_brands),
+    },
+    name="Verdi",
+).to_frame()
+display(feature_summary.round(2))
+
+# %%
+age_diagnostics = build_age_diagnostics(train_pool)
+display(age_diagnostics["summary"])
+display(age_diagnostics["residual_summary"])
+display(age_diagnostics["temporal_changes"])
+display(age_diagnostics["plausibility"])
+display(plot_age_diagnostics(age_diagnostics))
+assert age_diagnostics["plausibility"].loc["negativ_utledet_erfaring", "Verdi"] == 0
+assert age_diagnostics["plausibility"].loc["førerkortalder_over_føreralder", "Verdi"] == 0
+
+# %% [markdown]
+# **Konklusjon.** Residualen `driver_age - age_driving_licence - vehicle_age`
+# er praktisk talt null, og feltene endrer seg i tråd med dette mellom år for
+# samme polise. Det støtter arbeidshypotesen svært sterkt. Begrensningen er at
+# dette er en empirisk tolkning av et publisert datasett, ikke en verifisert
+# datadefinisjon; modellen får derfor ikke en påstått reell kjøretøyalder.
+
+# %% [markdown]
+# ## 18. Bonus_score: tidsplassering og informasjonsinnhold
+#
+# `bonus_score` kan være verdifull prisinformasjon, men kildebeskrivelsen gir
+# ingen eksakt *as-of*-dato. Diagnosen nedenfor bruker derfor bare strengt
+# sammenhengende par (`t-1 → t`) i **train_pool**: ingen 2024-observasjoner
+# påvirker featurevurderingen. G < N < B brukes kun for å definere forbedring
+# og forverring; selve scoren skal fortsatt behandles kategorisk i en modell.
+#
+# Dette er ikke kausal dokumentasjon og beviser verken leakage eller fravær av
+# leakage. Den undersøker om endringer er mer konsistente med laggede enn med
+# samtidige skader, og om scoren fortsatt skiller kaskofrekvens innen enkel,
+# eksplisitt observert ettårig skadehistorikk.
+
+# %%
+bonus_panel = build_bonus_lagged_panel(train_pool)
+bonus_transition = build_bonus_transition_matrix(bonus_panel)
+bonus_changes = build_bonus_change_summary(bonus_panel)
+display(
+    pd.Series(
+        {"Antall sammenhengende t-1 → t-par": len(bonus_panel)}, name="Verdi"
+    ).to_frame()
+)
+display(bonus_transition)
+display(plot_bonus_transition_matrix(bonus_transition))
+display(bonus_changes)
+display(plot_bonus_change_summary(bonus_changes))
+
+# %% [markdown]
+# Den multivariate timingtesten har forverring av bonus i t som utfall og
+# inkluderer både lagget og samtidig antall egen-skader og alle skader, med
+# kontroll for bonusklasse i t-1. Kalenderår tas med når det varierer; i den
+# leakage-sikre train-poolen finnes bare overgangen 2022 → 2023, så en
+# årseffekt kan ikke estimeres uten å åpne 2024-testen. Odds ratio over én betyr
+# høyere observert odds for bonusforverring, gitt de andre leddene. B er
+# dårligste klasse og kan definisjonsmessig ikke forverres; den holdes utenfor
+# dette risikosettet for å unngå perfekt separasjon, men vises fortsatt i
+# overgangsmatrisen. Dette er en stabilitetssjekk, ikke en kausal modell.
+
+# %%
+bonus_timing_effects, bonus_timing_diagnostics, bonus_timing_formula = (
+    fit_bonus_timing_model(bonus_panel)
+)
+display(bonus_timing_diagnostics)
+display(bonus_timing_effects)
+display(pd.Series({"Modellformel": bonus_timing_formula}, name="Verdi").to_frame())
+
+# %%
+lag_total_or = bonus_timing_effects.loc[
+    bonus_timing_effects["ledd"].eq("total_claims_lag"), "odds_ratio"
+].iloc[0]
+current_total_or = bonus_timing_effects.loc[
+    bonus_timing_effects["ledd"].eq("total_claims"), "odds_ratio"
+].iloc[0]
+timing_interpretation = pd.Series(
+    {
+        "Tolkning": (
+            f"I {int(bonus_timing_diagnostics.loc['sammenhengende_par_i_modell', 'Verdi']):,} "
+            f"par i risikosettet var odds ratio {lag_total_or:.2f} for én ekstra "
+            f"lagget totalskade, mot {current_total_or:.2f} for samtidig totalskade. "
+            "Sammen med intervallene i tabellen er dette konsistent med en lagget "
+            "tolkning, men ikke et bevis på leakage-fri timing."
+        )
+    },
+    name="Verdi",
+).to_frame()
+display(timing_interpretation)
+
+# %%
+bonus_history_strata = build_bonus_history_strata(bonus_panel)
+display(bonus_history_strata)
+display(plot_bonus_history_strata(bonus_history_strata))
+
+# %% [markdown]
+# **Beslutningsregel.** Dersom laggede skader er langt sterkere assosiert med
+# bonusforverring enn samtidige skader, støtter det en start-av-år/lagget
+# tolkning og `bonus_score` kan beholdes som en **betinget kandidat**. Hvis
+# scoren fortsatt skiller frekvens innen lagget skadehistorikk, kan den romme
+# eldre historikk eller underwriting-informasjon — men også uavklart timing.
+# Det er ikke bevis for leakage-fri bruk. Dersom samtidige skader dominerer
+# tydelig, ekskluderes scoren. Uansett skal senere modellering, kun innen
+# train/CV, sammenligne basis; basis + lagget historikk; basis + bonus; og
+# basis + begge, samt alltid rapportere en obligatorisk sensitivitetsmodell
+# uten bonus. Ingen av disse valgene skal bruke 2024-testen.
+
+# %% [markdown]
+# ## 19. Prediktorer: univariate fordelinger
+#
+# Rene fordelinger for modellprediktorene, uten skadeutfall. De numeriske
+# transformasjonene vises i stedet for råvariablene, slik at vi ikke senere
+# inkluderer rå og transformert variant av samme informasjon samtidig.
+
+# %%
+display(plot_numeric_predictor_histograms(train_pool))
+display(plot_categorical_predictor_bars(train_pool, columns=CATEGORICAL_VARS[:-1]))
+
+# %%
+brand_distribution = build_brand_distribution(train_pool)
+display(brand_distribution)
+display(plot_brand_distribution(brand_distribution))
+
+# %% [markdown]
+# ## 20. Manglende verdier i modellprediktorene
+#
+# Missingness følges for de transformerte prediktorene som faktisk går videre.
+# `vehicle_age` er ikke med fordi det er et uavklart diagnostisk felt, ikke en
+# modellvariabel.
+
+# %%
+missingness = build_missingness_outcome_comparison(train_pool)
+display(missingness)
+display(plot_missingness_summary(missingness))
+
+# %% [markdown]
+# ## 21. One-way-analyse: frekvens, severity og ren premie
+#
+# Oversiktsgridene viser eksponeringsandel og de tre ratene per nivå. Numeriske
+# variabler er kun delt i faste diagnosebøtter her; senere modellering bør bruke
+# kontinuerlige ledd eller splines. Stiplet linje er porteføljens rate. For
+# frekvens vises omtrentlige 95 %-Poissonintervaller; severity og ren premie
+# vises som punktestimat fordi aggregerte poliseår ikke gir skadeindivid-basert
+# usikkerhet uten flere modellantakelser.
+
+# %%
+categorical_one_way = {
+    column: build_categorical_one_way(train_pool, column)
+    for column in CATEGORICAL_VARS[:-1]
+}
+numeric_one_way = {
+    column: build_numeric_one_way(train_pool, column)
+    for column in NUMERIC_VARS
+}
+display(plot_one_way_grid(categorical_one_way, train_pool, "kategoriske"))
+display(plot_one_way_grid(numeric_one_way, train_pool, "numeriske"))
+
+# %%
+brand_one_way = build_brand_one_way(train_pool)
+display(brand_one_way)
+display(plot_brand_one_way(brand_one_way, train_pool))
+
+# %% [markdown]
+# ## 22. Samvariasjon blant prediktorer
+#
+# Relevant før GLM: sterkt korrelerte/assosierte prediktorer gir ustabile
+# koeffisienter. Pearson-korrelasjon for de valgte numeriske prediktorene og
+# Cramér's V (bias-korrigert) for kategoriske. `vehicle_age` og
+# `age_driving_licence` er bevisst utelatt fra modellprediktor-listene.
+
+# %%
+correlation_matrix = build_numeric_correlation(train_pool)
+display(correlation_matrix)
+display(plot_numeric_correlation_heatmap(correlation_matrix))
+
+# %%
+association_matrix = build_categorical_association(train_pool)
+display(association_matrix)
+display(plot_categorical_association_heatmap(association_matrix))
+
+# %%
+display(plot_numeric_by_category_boxplot(train_pool, "log_vehicle_value", "policy_type"))
