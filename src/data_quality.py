@@ -18,7 +18,7 @@ _VARIABLE_ROWS = [
     ("bonus_score", "Polise og kontrakt", "Grov klassifisering av forsikringstakerens tidligere skadeerfaring.", "G=god; N=nøytral; B=dårlig skadehistorikk", "Kategorisk/ordinal risikofaktor", "category", "Nei"),
     ("driver_age", "Fører og kjøretøy", "Alder på hovedføreren som er registrert på polisen.", "Hele år", "Numerisk risikofaktor", "Int16", "Nei"),
     ("vehicle_age", "Fører og kjøretøy", "Alder på det forsikrede kjøretøyet.", "Hele år", "Numerisk risikofaktor", "Int16", "Ja"),
-    ("age_driving_licence", "Fører og kjøretøy", "Antall år poliseholderen har hatt førerkort.", "Hele år", "Numerisk risikofaktor", "Int16", "Ja"),
+    ("age_driving_licence", "Fører og kjøretøy", "Kalenderåret da poliseholderen fikk førerkort.", "Årstall", "Numerisk risikofaktor", "Int16", "Ja"),
     ("fuel_type", "Fører og kjøretøy", "Drivstofftype for kjøretøyet.", "D=diesel; G=bensin", "Kategorisk risikofaktor", "category", "Ja"),
     ("vehicle_value", "Fører og kjøretøy", "Oppgitt forsikringsverdi for kjøretøyet. Artikkelen bruker euro i premiepresentasjonen, men variabelarket oppgir ikke valuta eksplisitt for dette feltet.", "Beløp; valuta ikke eksplisitt angitt i variabelarket", "Numerisk risikofaktor", "float64", "Ja"),
     ("seats", "Fører og kjøretøy", "Antall registrerte sitteplasser i kjøretøyet.", "Heltallsantall", "Numerisk risikofaktor", "Int16", "Nei"),
