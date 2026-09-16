@@ -45,6 +45,7 @@ from src.own_damage_descriptives import (
     build_brand_one_way,
     build_categorical_association,
     build_categorical_one_way,
+    build_cc_scope_evidence,
     build_claim_count_distribution,
     build_missingness_outcome_comparison,
     build_numeric_correlation,
@@ -331,7 +332,8 @@ display(plot_policy_type_composition(data))
 # positiv totaleksponering og positiv dekningspremie som en praktisk proxy for
 # at dekningen er aktiv (ingen per-dekning eksponeringsvariabel finnes).
 # Matrisen viser at egen skade (kasko) kun er aktiv for `policy_type` CC,
-# COMP_E og COMP_N — konsistent med at TP/TPG er rene ansvarsprodukter.
+# COMP_E og COMP_N — konsistent med at TP/TPG er rene ansvarsprodukter. CC
+# ekskluderes likevel fra modellpopulasjonen; se begrunnelsen i seksjon 11.
 
 # %%
 display(plot_coverage_by_policy_type_heatmap(pre_split["coverage_by_policy_type"]))
@@ -359,18 +361,44 @@ display(pre_split["response_summary"])
 # ## 11. Avgrensning til egen-skadedekning
 #
 # Basert på dekningsmatrisen (seksjon 9) og responsvolumet (seksjon 10)
-# avgrenses videre analyse til poliseår med positiv `property_damage_premium`
-# og positiv `total_exposure`. Premien brukes bare til å identifisere at
-# dekningen er aktiv, ikke som prediktor. Denne avgrensningen gir en tydelig
-# risikopopulasjon med tilstrekkelig skadevolum for både frekvens- og
-# severitymodellering. Naturlige utvidelser er å gjenta samme analyse separat
-# for de øvrige dekningene.
+# avgrenses videre analyse til poliseår med **kaskoprodukt** (`policy_type`
+# `COMP_E` eller `COMP_N`), positiv `property_damage_premium` og positiv
+# `total_exposure`. Premien brukes bare til å identifisere at dekningen er
+# aktiv, ikke som prediktor. Denne avgrensningen gir en tydelig risikopopulasjon
+# med tilstrekkelig skadevolum for både frekvens- og severitymodellering.
+# Naturlige utvidelser er å gjenta samme analyse separat for de øvrige
+# dekningene.
+#
+# **Hvorfor CC holdes utenfor (B-29).** Dekningsmatrisen viser at egen skade
+# formelt kan være aktiv for `CC`, men evidensen under viser at dette i praksis
+# ikke er en reell, stabil kaskodekning:
+#
+# - Bare 0,8 % av CC-poliseårene i 2022–2023 har positiv egen-skadepremie
+#   (0,47 % i 2022, 0,95 % i 2023) — mot at dekningen er standard i COMP_E/
+#   COMP_N.
+# - Av CC-poliser med egen-skadepremie som også finnes i det andre treningsåret,
+#   er 53–54 % registrert som COMP_E/COMP_N i det andre året. Siden kilden bare
+#   beholder siste registrering per poliseår, peker dette mot produktbytte, ikke
+#   en egen CC-kaskodekning.
+# - Prisingsgrunnlaget er ulikt: median egen-skadepremie per eksponeringsår per
+#   1000 i bilverdi er 3,96 for CC mot 8,69 for COMP_E.
+#
+# Skadeutfall (frekvens, skadeprosent) brukes **ikke** som begrunnelse — det
+# ville latt utfallet definere populasjonen. Evidenstabellen under er beregnet
+# på `TRAIN_YEARS` (2022–2023) og bygges av `build_cc_scope_evidence` i
+# `src/own_damage_descriptives.py`.
 #
 # **Hvor koden ligger.** Avgrensningen gjøres av `select_own_damage_scope` i
-# `src/model_data.py`. Funksjonen filtrerer på nøyaktig regelen over:
-# `property_damage_premium > 0` og `total_exposure > 0`. Den ligger i et felles
-# script slik at modelleringsnotebooken `glm_pricing_models` bruker samme
-# populasjon uten å kopiere koden. Selve beslutningen og begrunnelsen står her.
+# `src/model_data.py`, som filtrerer på `policy_type in OWN_DAMAGE_PRODUCTS`
+# (`COMP_E`, `COMP_N`), `property_damage_premium > 0` og `total_exposure > 0`.
+# Den ligger i et felles script slik at modelleringsnotebooken
+# `glm_pricing_models` bruker samme populasjon uten å kopiere koden. Selve
+# beslutningen og begrunnelsen står her.
+
+# %%
+# Evidensgrunnlaget for å ekskludere CC (B-29), beregnet på train-årene alene.
+cc_scope_evidence = build_cc_scope_evidence(data, TRAIN_YEARS)
+display(cc_scope_evidence)
 
 # %%
 df = select_own_damage_scope(data)
@@ -379,9 +407,10 @@ display(scope_summary)
 display(scope_exceptions)
 assert df["property_damage_premium"].gt(0).all()
 assert df["total_exposure"].gt(0).all()
+assert df["policy_type"].isin(["COMP_E", "COMP_N"]).all()
 
 # %%
-# Som vi ser inneholder kun datasettet de forventede polisetypene etter avgrensningen.
+# Som vi ser inneholder datasettet kun COMP_E og COMP_N etter avgrensningen — CC er ekskludert (B-29).
 df["policy_type"].unique()
 
 # %% [markdown]
@@ -865,30 +894,31 @@ df["property_claims"].unique()
 #
 # Analysen gir et godt nok grunnlag til å gå videre med en første modell for
 # egen skade, men ikke til å låse endelig modell eller endelig variabelsett.
-# Modellpopulasjonen består av 56 084 poliseår i 2022–2023, tilsvarende
-# 37 904 eksponeringsår, 37 727 unike forsikringstakere og 10 126 skader.
+# Modellpopulasjonen består av 55 246 poliseår i 2022–2023, tilsvarende
+# 37 126 eksponeringsår, 37 305 unike forsikringstakere og 9 989 skader.
 # Datamengden er stor nok for ordinære GLM-er og noen kontrollerte, ikke-lineære
-# effekter. Den er likevel ikke stor i alle undergrupper: særlig CC, sjeldne
-# bilmerker, manglende-kategorier og eventuelle interaksjoner må behandles
-# forsiktig.
+# effekter. Den er likevel ikke stor i alle undergrupper: særlig COMP_N (langt
+# lavere eksponering enn COMP_E), sjeldne bilmerker, manglende-kategorier og
+# eventuelle interaksjoner må behandles forsiktig.
 #
-# Egen-skadedekningen utgjør omtrent 31 % av eksponeringen i hele porteføljen og
-# finnes bare for CC, COMP_E og COMP_N. I train-poolen dominerer COMP_E med
-# 81,3 % av eksponeringen, mens COMP_N har 16,6 % og CC 2,1 %. Produktforskjellen
-# er viktig: observert skadefrekvens er omtrent 0,18 for CC og COMP_E, men 0,69
-# for COMP_N. Dette kan skyldes både risiko, egenandel og hvordan skader
-# registreres. `policy_type` må derfor være med fra starten; den er mer enn en
-# vanlig kontrollvariabel og beskriver ulike forsikringsvilkår.
+# Egen-skadedekningen (kasko) utgjør omtrent 31 % av eksponeringen i hele
+# porteføljen og er formelt aktiv for `policy_type` CC, COMP_E og COMP_N, men
+# CC ekskluderes fra modellpopulasjonen (seksjon 11, B-29). I train-poolen
+# (COMP_E og COMP_N) utgjør COMP_E 83,0 % av eksponeringen og COMP_N 17,0 %.
+# Produktforskjellen er viktig: observert skadefrekvens er omtrent 0,18 for
+# COMP_E, men 0,69 for COMP_N. Dette kan skyldes både risiko, egenandel og
+# hvordan skader registreres. `policy_type` må derfor være med fra starten; den
+# er mer enn en vanlig kontrollvariabel og beskriver ulike forsikringsvilkår.
 #
 # Skadeutfallet er nulltungt og høyreskjevt:
 #
 # - 89,7 % av poliseårene har ingen registrert skade.
 # - Gjennomsnittlig skadeantall per rad er 0,181, mens variansen er 0,468
 #   (rått varians/gjennomsnitt = 2,59).
-# - Blant de 5 778 poliseårene med skade er uvektet gjennomsnittlig severity
-#   1 059 EUR, medianen 617 EUR, p99 7 973 EUR og maksimum 27 333 EUR.
-# - Porteføljens eksponeringsvektede frekvens er 0,267 skader per poliseår og
-#   samlet ren premie er omtrent 232 EUR per eksponeringsår.
+# - Blant de 5 707 poliseårene med skade er uvektet gjennomsnittlig severity
+#   1 061 EUR, medianen 617 EUR, p99 7 950 EUR og maksimum 27 333 EUR.
+# - Porteføljens eksponeringsvektede frekvens er 0,269 skader per poliseår og
+#   samlet ren premie er omtrent 235 EUR per eksponeringsår.
 # - Ren premie per enkelt rad har en ekstrem hale. Maksimum på 1,19 mill. EUR
 #   er en annualisert rate fra en skade på en svært kort eksponering, ikke en
 #   skade på 1,19 mill. EUR. Slike rater må derfor ikke tolkes som skadebeløp
@@ -914,9 +944,9 @@ df["property_claims"].unique()
 # brukes som en utfordrermodell. De ni skadeårene med null eller praktisk talt
 # null incurred må avklares og kan ikke inngå uendret i en Gamma-modell.
 #
-# Fra 2022 til 2023 øker frekvensen fra 0,235 til 0,282 (omtrent 20 %), severity
-# faller fra 935 til 843 EUR (omtrent 10 %), og ren premie øker fra 220 til
-# 238 EUR (omtrent 8 %). Dette kan være en reell tidseffekt, men også skyldes
+# Fra 2022 til 2023 øker frekvensen fra 0,235 til 0,285 (omtrent 21 %), severity
+# faller fra 938 til 845 EUR (omtrent 10 %), og ren premie øker fra 221 til
+# 241 EUR (omtrent 9 %). Dette kan være en reell tidseffekt, men også skyldes
 # endret porteføljemiks, skadeoppgjørsmodning eller tilfeldig variasjon.
 # Kalenderår kan brukes som kategorisk kontroll eller til senere rekalibrering;
 # det er **ikke** en offset. To treningsår er for lite til å estimere en stabil
@@ -930,7 +960,7 @@ df["property_claims"].unique()
 #
 # - **Høy prioritet:** `policy_type` har klart størst produktmessig betydning.
 #   `bonus_score` har en sterk, monoton gradient i frekvens og ren premie
-#   (omtrent 224, 351 og 567 EUR for G, N og B), men tas bare med dersom
+#   (omtrent 226, 353 og 570 EUR for G, N og B), men tas bare med dersom
 #   tidspunktet for fastsettelsen kan dokumenteres som leakage-fritt.
 # - **Kjøretøy:** Ren premie stiger tydelig med `log_vehicle_value` og
 #   `performance_hp_per_tonne`, særlig i øverste intervall. Begge bør prøves som
@@ -967,7 +997,7 @@ df["property_claims"].unique()
 #   kort eksponering eller informasjon som oppstår i løpet av året.
 #
 # Manglendeverdiene er få, men ikke nødvendigvis tilfeldige. Manglende
-# `fuel_type` (439 rader) og `vehicle_value` (33 rader) har høyere observert
+# `fuel_type` (438 rader) og `vehicle_value` (33 rader) har høyere observert
 # frekvens enn komplette rader, men gruppene er små. Bruk en eksplisitt og
 # reproducerbar manglende-strategi som læres i hver CV-fold, og sørg for at
 # produksjonspipelinen håndterer manglende verdier og nye kategorier selv om de

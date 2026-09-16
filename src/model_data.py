@@ -6,9 +6,11 @@ modellene trenger. Stegene ble først utviklet og begrunnet i ``analysis.py``
 ``glm_pricing_models.py`` bruker nøyaktig samme populasjon, splitt og
 prediktorer:
 
-1. **Avgrensning** (``select_own_damage_scope``): poliseår med positiv
-   ``property_damage_premium`` (dekningen er aktiv) og positiv
-   ``total_exposure`` (poliseåret har risiko). Premien brukes bare som
+1. **Avgrensning** (``select_own_damage_scope``): poliseår med kaskoprodukt
+   (``COMP_E`` eller ``COMP_N``), positiv ``property_damage_premium`` (dekningen
+   er aktiv) og positiv ``total_exposure`` (poliseåret har risiko). CC holdes
+   utenfor (B-29): bare 0,8 % av CC-poliseårene har egen-skadepremie, og
+   gruppen ser ut til å bestå av produktbyttere. Premien brukes bare som
    dekningsflagg, aldri som prediktor.
 2. **Tidssplitt** (``split_by_year``): 2022–2023 er train/CV-pool, 2024 er urørt
    test. Splitten er deterministisk og bruker ingen skadeutfall.
@@ -37,12 +39,16 @@ DATA_PATH = Path("data/Dataset of motor insurance portfolio.csv")
 TRAIN_YEARS = (2022, 2023)
 TEST_YEAR = 2024
 BRAND_MIN_EXPOSURE = 500.0
+# Kaskoprodukter i modellpopulasjonen; CC holdes utenfor (B-29)
+OWN_DAMAGE_PRODUCTS = ("COMP_E", "COMP_N")
 
 
-def select_own_damage_scope(data):
-    """Avgrens til poliseår med aktiv egen-skadedekning og positiv eksponering."""
-    own_damage_mask = data["property_damage_premium"].gt(0) & data["total_exposure"].gt(
-        0
+def select_own_damage_scope(data, products=OWN_DAMAGE_PRODUCTS):
+    """Avgrens til kaskoprodukter med aktiv egen-skadedekning og positiv eksponering."""
+    own_damage_mask = (
+        data["policy_type"].isin(products)
+        & data["property_damage_premium"].gt(0)
+        & data["total_exposure"].gt(0)
     )
     return data.loc[own_damage_mask].copy()
 

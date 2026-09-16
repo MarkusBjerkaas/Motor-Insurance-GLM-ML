@@ -36,7 +36,7 @@ Rediger **aldri** `analysis.ipynb` direkte. Rediger alltid `analysis.py` (jupyte
 
 - Skriv ikke modeller from scratch der et etablert bibliotek dekker det — bruk `statsmodels`, `sklearn`, eller relevante credibility-pakker.
 - Før en modell fittes: legg alltid inn en markdown-celle med modell-likningen i LaTeX og en kort forklaring, matematisk og intuitivt. Hold forklaringen kort.
-
+- ALDRI bruk data fra 2024 - testsettet uten at jeg har bekreftet det. 
 ## Kodestil
 
 Godt kommentert og lesbart — jeg skal selv enkelt forstå hva som foregår. Kompakt, men lesbart. Ingen over-engineering.

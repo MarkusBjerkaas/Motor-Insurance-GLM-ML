@@ -82,7 +82,7 @@ def build_glm_summary(spec, result, data):
     return pd.Series(
         {
             "formel": spec["formula"],
-            "familie": type(spec["family"]).__name__,
+            "familie": type(spec["glm_family"]).__name__,
             "rader": len(data),
             "parametere": len(result.params),
             "deviance": deviance(prediction),

@@ -69,6 +69,94 @@ MISSING_CHECK_VARS = [
 
 
 # ---------------------------------------------------------------------------
+# Tabell: grunnlag for avgrensningsbeslutningen (B-29, CC ekskluderes)
+# ---------------------------------------------------------------------------
+
+
+def build_cc_scope_evidence(data, years):
+    """Dokumenter grunnlaget for å ekskludere CC fra egen-skadepopulasjonen (B-29).
+
+    Tar den urensede/ufiltrerte ``data`` (alle policy_type, ikke bare
+    kaskoprodukter) og avgrenser internt til ``years`` (skal alltid være
+    ``TRAIN_YEARS`` — aldri 2024). Ingen skadeutfall inngår i noen av de tre
+    evidenspunktene:
+
+    1. Andel CC-poliseår med positiv egen-skadepremie, per år og samlet — viser
+       at egen-skade i praksis nesten aldri er aktiv for CC.
+    2. Blant CC-poliseår med egen-skadepremie som også finnes i det andre
+       treningsåret: andel som da er registrert som COMP_E/COMP_N. Høy andel
+       indikerer produktbytte (kilden beholder bare siste registrering per
+       poliseår), ikke en stabil CC-kaskodekning.
+    3. Median egen-skadepremie per eksponeringsår per 1000 i bilverdi for
+       CC vs. COMP_E vs. COMP_N — viser at prisingsgrunnlaget for CC-gruppen
+       avviker fra de faktiske kaskoproduktene.
+    """
+    scope = data.loc[data["year"].isin(years)].copy()
+    scope["policy_type"] = scope["policy_type"].astype(str)
+    rows = []
+
+    # 1) OD-premie-andel for CC, per år og samlet
+    cc = scope.loc[scope["policy_type"].eq("CC")]
+    for year, sub in cc.groupby("year"):
+        rows.append(
+            {
+                "evidens": "Andel CC-poliseår med positiv egen-skadepremie",
+                "gruppe": str(year),
+                "verdi": sub["property_damage_premium"].gt(0).mean() * 100,
+                "enhet": "% av CC-poliseår",
+            }
+        )
+    rows.append(
+        {
+            "evidens": "Andel CC-poliseår med positiv egen-skadepremie",
+            "gruppe": "-".join(str(y) for y in years),
+            "verdi": cc["property_damage_premium"].gt(0).mean() * 100,
+            "enhet": "% av CC-poliseår",
+        }
+    )
+
+    # 2) Produktbytte: CC-med-OD som finnes i det andre året
+    cc_od = cc.loc[cc["property_damage_premium"].gt(0), ["insured_id", "year"]]
+    other = scope[["insured_id", "year", "policy_type"]].merge(
+        cc_od, on="insured_id", suffixes=("", "_cc")
+    )
+    other = other.loc[other["year"].ne(other["year_cc"])]
+    switch_share = (
+        other["policy_type"].isin(("COMP_E", "COMP_N")).mean() if len(other) else np.nan
+    )
+    rows.append(
+        {
+            "evidens": "Andel CC-med-OD som er COMP_E/COMP_N i det andre året",
+            "gruppe": f"n={other['insured_id'].nunique()}",
+            "verdi": switch_share * 100,
+            "enhet": "% av CC-med-OD funnet i annet år",
+        }
+    )
+
+    # 3) Prisingsgrunnlag: OD-premie per eksponeringsår per 1000 i bilverdi
+    od = scope.loc[
+        scope["property_damage_premium"].gt(0) & scope["total_exposure"].gt(0)
+    ].copy()
+    od["premie_rate"] = (
+        od["property_damage_premium"].astype(float)
+        / od["total_exposure"].astype(float)
+        / od["vehicle_value"].astype(float)
+        * 1000
+    )
+    for product in ("CC", "COMP_E", "COMP_N"):
+        rows.append(
+            {
+                "evidens": "Median OD-premie per eksp.år per 1000 i bilverdi",
+                "gruppe": product,
+                "verdi": od.loc[od["policy_type"].eq(product), "premie_rate"].median(),
+                "enhet": "EUR-rate",
+            }
+        )
+
+    return pd.DataFrame(rows).round(2)
+
+
+# ---------------------------------------------------------------------------
 # Tabeller: utfallsvariablene selv
 # ---------------------------------------------------------------------------
 
@@ -157,7 +245,9 @@ def _fit_positive_distributions(values, zero_tolerance=CURRENCY_ZERO_TOLERANCE):
     diagnostic_zero = np.isclose(all_values, 0, atol=zero_tolerance, rtol=0)
     positive = all_values.loc[~diagnostic_zero & all_values.gt(zero_tolerance)]
     if positive.empty:
-        raise ValueError("Kan ikke tilpasse positiv fordeling uten positive observasjoner.")
+        raise ValueError(
+            "Kan ikke tilpasse positiv fordeling uten positive observasjoner."
+        )
     gamma_shape, _, gamma_scale = stats.gamma.fit(positive, floc=0)
     log_sigma, _, log_scale = stats.lognorm.fit(positive, floc=0)
     fits = [
@@ -167,7 +257,9 @@ def _fit_positive_distributions(values, zero_tolerance=CURRENCY_ZERO_TOLERANCE):
             "parameter_1_navn": "shape",
             "parameter_2": gamma_scale,
             "parameter_2_navn": "scale",
-            "log_likelihood": stats.gamma.logpdf(positive, gamma_shape, loc=0, scale=gamma_scale).sum(),
+            "log_likelihood": stats.gamma.logpdf(
+                positive, gamma_shape, loc=0, scale=gamma_scale
+            ).sum(),
         },
         {
             "fordeling": "Lognormal",
@@ -175,7 +267,9 @@ def _fit_positive_distributions(values, zero_tolerance=CURRENCY_ZERO_TOLERANCE):
             "parameter_1_navn": "sigma",
             "parameter_2": log_scale,
             "parameter_2_navn": "scale = exp(mu)",
-            "log_likelihood": stats.lognorm.logpdf(positive, log_sigma, loc=0, scale=log_scale).sum(),
+            "log_likelihood": stats.lognorm.logpdf(
+                positive, log_sigma, loc=0, scale=log_scale
+            ).sum(),
         },
     ]
     result = pd.DataFrame(fits)
@@ -369,12 +463,12 @@ def build_bonus_lagged_panel(frame):
     score_order = {"G": 0, "N": 1, "B": 2}
     panel["bonus_score_lag"] = panel["bonus_score_lag"].astype("string")
     panel["bonus_score"] = panel["bonus_score"].astype("string")
-    panel["bonus_worsened_t"] = (
-        panel["bonus_score"].map(score_order) > panel["bonus_score_lag"].map(score_order)
-    )
-    panel["bonus_improved_t"] = (
-        panel["bonus_score"].map(score_order) < panel["bonus_score_lag"].map(score_order)
-    )
+    panel["bonus_worsened_t"] = panel["bonus_score"].map(score_order) > panel[
+        "bonus_score_lag"
+    ].map(score_order)
+    panel["bonus_improved_t"] = panel["bonus_score"].map(score_order) < panel[
+        "bonus_score_lag"
+    ].map(score_order)
     for prefix, column in [("property", CLAIMS_COL), ("total", "total_claims")]:
         panel[f"{prefix}_claim_lag_indicator"] = panel[f"{column}_lag"].gt(0)
         panel[f"{prefix}_claim_t_indicator"] = panel[column].gt(0)
@@ -399,7 +493,10 @@ def build_bonus_change_summary(bonus_panel):
             ("Skade i t-1", f"{prefix}_claim_lag_indicator"),
             ("Skade i t", f"{prefix}_claim_t_indicator"),
         ]:
-            for label, mask in [("Ingen skade", ~bonus_panel[indicator]), ("Minst én skade", bonus_panel[indicator])]:
+            for label, mask in [
+                ("Ingen skade", ~bonus_panel[indicator]),
+                ("Minst én skade", bonus_panel[indicator]),
+            ]:
                 subset = bonus_panel.loc[mask]
                 rows.append(
                     {
@@ -431,9 +528,11 @@ def fit_bonus_timing_model(bonus_panel):
     ]
     # B er dårligste klasse og kan per definisjon ikke forverres; den gir
     # perfekt separasjon og holdes utenfor risikosettet for dette utfallet.
-    model_data = bonus_panel.dropna(subset=required).loc[
-        lambda frame: frame["bonus_score_lag"].ne("B")
-    ].copy()
+    model_data = (
+        bonus_panel.dropna(subset=required)
+        .loc[lambda frame: frame["bonus_score_lag"].ne("B")]
+        .copy()
+    )
     model_data["bonus_worsened_t"] = model_data["bonus_worsened_t"].astype(int)
     formula_terms = [
         "C(bonus_score_lag, Treatment(reference='G'))",
@@ -447,7 +546,9 @@ def fit_bonus_timing_model(bonus_panel):
         formula_terms.append("C(year)")
     formula = "bonus_worsened_t ~ " + " + ".join(formula_terms)
     if model_data["bonus_worsened_t"].nunique() < 2:
-        raise ValueError("Bonusforverring har bare ett observert utfall; logistisk test kan ikke estimeres.")
+        raise ValueError(
+            "Bonusforverring har bare ett observert utfall; logistisk test kan ikke estimeres."
+        )
     fitted = smf.logit(formula, data=model_data).fit(disp=False, maxiter=100)
     interval = fitted.conf_int()
     coefficients = pd.DataFrame(
@@ -467,7 +568,9 @@ def fit_bonus_timing_model(bonus_panel):
             ),
             "bonusforverringer": int(model_data["bonus_worsened_t"].sum()),
             "forverring_prosent": model_data["bonus_worsened_t"].mean() * 100,
-            "kalenderår_estimert": "Ja" if year_estimable else "Nei; train-pool har bare overgang til 2023",
+            "kalenderår_estimert": "Ja"
+            if year_estimable
+            else "Nei; train-pool har bare overgang til 2023",
             "konvergerte": bool(fitted.mle_retvals.get("converged", False)),
         },
         name="Verdi",
@@ -484,9 +587,13 @@ def build_bonus_history_strata(bonus_panel):
         ("Lagget egen-skadehistorikk", "property_claims_lag"),
     ]:
         working = bonus_panel.assign(
-            historikk_stratum=np.where(bonus_panel[column].gt(0), "1+ skade", "0 skader")
+            historikk_stratum=np.where(
+                bonus_panel[column].gt(0), "1+ skade", "0 skader"
+            )
         )
-        for history, score in [(history, score) for history in ["0 skader", "1+ skade"] for score in order]:
+        for history, score in [
+            (history, score) for history in ["0 skader", "1+ skade"] for score in order
+        ]:
             subset = working.loc[
                 working["historikk_stratum"].eq(history)
                 & working["bonus_score"].eq(score)
@@ -500,7 +607,9 @@ def build_bonus_history_strata(bonus_panel):
                     "poliseår": len(subset),
                     "eksponering": exposure,
                     "skadeantall_t": subset[CLAIMS_COL].sum(),
-                    "frekvens_t": subset[CLAIMS_COL].sum() / exposure if exposure else np.nan,
+                    "frekvens_t": subset[CLAIMS_COL].sum() / exposure
+                    if exposure
+                    else np.nan,
                 }
             )
     return pd.DataFrame(rows).round(4)
@@ -529,9 +638,7 @@ def build_age_diagnostics(frame):
                 "maks": values.max(),
             }
         )
-    residual = (
-        frame["driver_age"] - frame["age_driving_licence"] - frame["vehicle_age"]
-    )
+    residual = frame["driver_age"] - frame["age_driving_licence"] - frame["vehicle_age"]
     residual_summary = pd.Series(
         {
             "sammenlignbare_rader": int(residual.notna().sum()),
@@ -577,9 +684,7 @@ def build_age_diagnostics(frame):
             "negativ_utledet_erfaring": int(
                 frame["driving_experience_years"].lt(0).sum()
             ),
-            "førerkortalder_under_14": int(
-                frame["age_driving_licence"].lt(14).sum()
-            ),
+            "førerkortalder_under_14": int(frame["age_driving_licence"].lt(14).sum()),
             "førerkortalder_over_føreralder": int(
                 frame["age_driving_licence"].gt(frame["driver_age"]).sum()
             ),
@@ -722,7 +827,9 @@ def _plot_positive_distribution_panels(positive, fit_table, title, absolute_labe
     axes[0].hist(visible, bins=bins, density=True, color=CONTEXT, edgecolor=SURFACE)
     x = np.linspace(positive.min(), absolute_limit, 300)
     density, selected_name = _fitted_density(x, fit_table)
-    axes[0].plot(x, density, color="#b23a2f", linewidth=2, label=f"{selected_name}, best AIC")
+    axes[0].plot(
+        x, density, color="#b23a2f", linewidth=2, label=f"{selected_name}, best AIC"
+    )
     axes[0].legend(frameon=False, fontsize=8)
     _style_axes(axes[0], f"{title}: absolutt skala", "Tetthet", absolute_label)
     axes[0].text(
@@ -740,12 +847,22 @@ def _plot_positive_distribution_panels(positive, fit_table, title, absolute_labe
     axes[1].hist(positive, bins=log_bins, color=ACCENT, edgecolor=SURFACE)
     axes[1].set_xscale("log")
     axes[1].set_xlim(positive.min(), positive.max())
-    _style_axes(axes[1], f"{title}: hele positive hale", "Antall poliseår", f"{absolute_label}, log-skala")
+    _style_axes(
+        axes[1],
+        f"{title}: hele positive hale",
+        "Antall poliseår",
+        f"{absolute_label}, log-skala",
+    )
 
     stats.probplot(np.log(positive), dist="norm", plot=axes[2])
     for line in axes[2].get_lines():
         line.set_color(ACCENT)
-    _style_axes(axes[2], f"Q-Q: log({absolute_label})", "Observerte kvantiler", "Normale teoretiske kvantiler")
+    _style_axes(
+        axes[2],
+        f"Q-Q: log({absolute_label})",
+        "Observerte kvantiler",
+        "Normale teoretiske kvantiler",
+    )
     fig.tight_layout()
     plt.close(fig)
     return fig
@@ -782,25 +899,58 @@ def plot_pure_premium_distribution(frame, fit_table):
     absolute_limit = positive.quantile(0.99)
     visible = positive.loc[positive.le(absolute_limit)]
     outside = int(positive.gt(absolute_limit).sum())
-    axes[1].hist(visible, bins=np.linspace(0, absolute_limit, 35), density=True, color=CONTEXT, edgecolor=SURFACE)
+    axes[1].hist(
+        visible,
+        bins=np.linspace(0, absolute_limit, 35),
+        density=True,
+        color=CONTEXT,
+        edgecolor=SURFACE,
+    )
     x = np.linspace(positive.min(), absolute_limit, 300)
     density, selected_name = _fitted_density(x, fit_table)
-    axes[1].plot(x, density, color="#b23a2f", linewidth=2, label=f"{selected_name}, best AIC")
+    axes[1].plot(
+        x, density, color="#b23a2f", linewidth=2, label=f"{selected_name}, best AIC"
+    )
     axes[1].legend(frameon=False, fontsize=8)
     _style_axes(axes[1], "Gitt positiv ren premie: absolutt", "Tetthet", "Ren premie")
-    axes[1].text(0.98, 0.95, f"t.o.m. p99; {outside:,} over grensen", transform=axes[1].transAxes, ha="right", va="top", fontsize=7.5, color=INK_MUTED)
+    axes[1].text(
+        0.98,
+        0.95,
+        f"t.o.m. p99; {outside:,} over grensen",
+        transform=axes[1].transAxes,
+        ha="right",
+        va="top",
+        fontsize=7.5,
+        color=INK_MUTED,
+    )
 
     log_bins = np.logspace(np.log10(positive.min()), np.log10(positive.max()), 45)
     axes[2].hist(positive, bins=log_bins, color=ACCENT, edgecolor=SURFACE)
     axes[2].set_xscale("log")
     axes[2].set_xlim(positive.min(), positive.max())
-    _style_axes(axes[2], "Gitt positiv ren premie: hele hale", "Antall poliseår", "Ren premie, log-skala")
+    _style_axes(
+        axes[2],
+        "Gitt positiv ren premie: hele hale",
+        "Antall poliseår",
+        "Ren premie, log-skala",
+    )
 
     stats.probplot(np.log(positive), dist="norm", plot=axes[3])
     for line in axes[3].get_lines():
         line.set_color(ACCENT)
-    _style_axes(axes[3], "Q-Q: log(positiv ren premie)", "Observerte kvantiler", "Normale teoretiske kvantiler")
-    fig.text(0.01, 0.005, f"{fit_table.attrs['diagnostic_zero_count']:,} null-/nærnullverdier (≤ {fit_table.attrs['zero_tolerance']:.2f}) er kun i nullmassepanelet; histogram og fit er betinget på positiv ren premie.", color=INK_MUTED, fontsize=8)
+    _style_axes(
+        axes[3],
+        "Q-Q: log(positiv ren premie)",
+        "Observerte kvantiler",
+        "Normale teoretiske kvantiler",
+    )
+    fig.text(
+        0.01,
+        0.005,
+        f"{fit_table.attrs['diagnostic_zero_count']:,} null-/nærnullverdier (≤ {fit_table.attrs['zero_tolerance']:.2f}) er kun i nullmassepanelet; histogram og fit er betinget på positiv ren premie.",
+        color=INK_MUTED,
+        fontsize=8,
+    )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     plt.close(fig)
     return fig
@@ -840,7 +990,10 @@ def plot_age_diagnostics(age_diagnostics, max_points=12000):
         rasterized=True,
     )
     limit = float(
-        max(comparison["driving_experience_years"].max(), comparison["vehicle_age"].max())
+        max(
+            comparison["driving_experience_years"].max(),
+            comparison["vehicle_age"].max(),
+        )
     )
     ax_scatter.plot([0, limit], [0, limit], color="#b23a2f", linestyle="--")
     _style_axes(
@@ -862,7 +1015,9 @@ def plot_age_diagnostics(age_diagnostics, max_points=12000):
     )
 
     columns = ["uendret_prosent", "lik_årsgapp_prosent", "fall_prosent"]
-    temporal.loc[:, columns].plot.barh(ax=ax_temporal, color=[CONTEXT, ACCENT, "#b23a2f"])
+    temporal.loc[:, columns].plot.barh(
+        ax=ax_temporal, color=[CONTEXT, ACCENT, "#b23a2f"]
+    )
     _style_axes(
         ax_temporal,
         "Longitudinelle endringer per polise",
@@ -909,9 +1064,13 @@ def plot_bonus_change_summary(change_summary):
             colors = np.where(subset["gruppe"].eq("Minst én skade"), ACCENT, CONTEXT)
             ax.bar(np.arange(len(subset)), subset[outcome], color=colors)
             ax.set_xticks(np.arange(len(subset)), labels, rotation=25, ha="right")
-            outcome_label = "Forverret" if outcome == "forverret_prosent" else "Forbedret"
+            outcome_label = (
+                "Forverret" if outcome == "forverret_prosent" else "Forbedret"
+            )
             _style_axes(ax, f"{claim_type}: {outcome_label.lower()}", "Andel par (%)")
-    fig.suptitle("Bonusendring betinget på skade i t-1 og t", x=0.01, ha="left", fontsize=13)
+    fig.suptitle(
+        "Bonusendring betinget på skade i t-1 og t", x=0.01, ha="left", fontsize=13
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     plt.close(fig)
     return fig
@@ -929,7 +1088,9 @@ def plot_bonus_history_strata(history_strata):
         positions = np.arange(2)
         width = 0.22
         for index, score in enumerate(["G", "N", "B"]):
-            values = subset.loc[subset["bonus_score"].eq(score)].set_index("historikk_stratum")
+            values = subset.loc[subset["bonus_score"].eq(score)].set_index(
+                "historikk_stratum"
+            )
             ordered = values.reindex(["0 skader", "1+ skade"])
             ax.bar(
                 positions + (index - 1) * width,
@@ -948,7 +1109,13 @@ def plot_bonus_history_strata(history_strata):
         ax.set_xticks(positions, ["0 skader", "1+ skade"])
         _style_axes(ax, definition, "Kaskofrekvens i t", "Lagget skadehistorikk")
         ax.legend(title="Bonus i t", frameon=False, fontsize=8)
-    fig.text(0.01, 0.005, "* under 100 eksponeringsår; tolk med varsomhet.", color=INK_MUTED, fontsize=8)
+    fig.text(
+        0.01,
+        0.005,
+        "* under 100 eksponeringsår; tolk med varsomhet.",
+        color=INK_MUTED,
+        fontsize=8,
+    )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     plt.close(fig)
     return fig
@@ -1004,7 +1171,14 @@ def plot_brand_distribution(brand_distribution):
         color=ACCENT,
     )
     for y, share in enumerate(brand_distribution["andel_eksponering_prosent"]):
-        ax.text(share + 0.05, y, f"{share:.1f}%", va="center", fontsize=8, color=INK_SECONDARY)
+        ax.text(
+            share + 0.05,
+            y,
+            f"{share:.1f}%",
+            va="center",
+            fontsize=8,
+            color=INK_SECONDARY,
+        )
     top_n = brand_distribution.attrs.get("top_n", len(brand_distribution))
     top_share = brand_distribution.attrs.get("top_share", np.nan)
     other_share = brand_distribution.attrs.get("other_share", np.nan)
@@ -1082,7 +1256,14 @@ def _plot_one_way_rate(ax, table, column, label, portfolio_rate, horizontal=Fals
         ax.scatter(table[column], position, color=ACCENT, s=28, zorder=3)
         if column == "frekvens":
             error = 1.96 * np.sqrt(table["skadeantall"]) / table["eksponering"]
-            ax.errorbar(table[column], position, xerr=error, fmt="none", color=ACCENT, alpha=0.55)
+            ax.errorbar(
+                table[column],
+                position,
+                xerr=error,
+                fmt="none",
+                color=ACCENT,
+                alpha=0.55,
+            )
         ax.axvline(portfolio_rate, color=INK_MUTED, linestyle="--", linewidth=1)
         ax.set_yticks(position, table["nivå"].astype(str))
         _style_axes(ax, label, "", label)
@@ -1091,7 +1272,14 @@ def _plot_one_way_rate(ax, table, column, label, portfolio_rate, horizontal=Fals
         ax.scatter(position, table[column], color=ACCENT, s=24, zorder=3)
         if column == "frekvens":
             error = 1.96 * np.sqrt(table["skadeantall"]) / table["eksponering"]
-            ax.errorbar(position, table[column], yerr=error, fmt="none", color=ACCENT, alpha=0.55)
+            ax.errorbar(
+                position,
+                table[column],
+                yerr=error,
+                fmt="none",
+                color=ACCENT,
+                alpha=0.55,
+            )
         ax.axhline(portfolio_rate, color=INK_MUTED, linestyle="--", linewidth=1)
         ax.set_xticks(position, table["nivå"].astype(str), rotation=35, ha="right")
         _style_axes(ax, label, label)
@@ -1124,7 +1312,9 @@ def plot_one_way_grid(one_way_tables, frame, kind):
         positions = np.arange(len(table))
         ax_exposure = axes[row, 0]
         ax_exposure.bar(positions, table["andel_eksponering_prosent"], color=CONTEXT)
-        ax_exposure.set_xticks(positions, table["nivå"].astype(str), rotation=35, ha="right")
+        ax_exposure.set_xticks(
+            positions, table["nivå"].astype(str), rotation=35, ha="right"
+        )
         _style_axes(ax_exposure, f"{variable}: eksponering", "Andel (%)")
         for col, rate in enumerate(["frekvens", "severity", "ren_premie"], start=1):
             _plot_one_way_rate(
@@ -1150,7 +1340,9 @@ def plot_brand_one_way(brand_one_way, frame):
     viser punktestimat og må tolkes særlig varsomt for åpne punkter.
     """
     table = brand_one_way.copy()
-    fig, axes = plt.subplots(1, 4, figsize=(18, max(5.5, len(table) * 0.34)), facecolor=SURFACE)
+    fig, axes = plt.subplots(
+        1, 4, figsize=(18, max(5.5, len(table) * 0.34)), facecolor=SURFACE
+    )
     y = np.arange(len(table))
     axes[0].barh(y, table["andel_eksponering_prosent"], color=CONTEXT)
     axes[0].set_yticks(y, table["nivå"].astype(str))
@@ -1162,21 +1354,41 @@ def plot_brand_one_way(brand_one_way, frame):
         "ren_premie": frame[INCURRED_COL].sum() / frame[EXPOSURE_COL].sum(),
     }
     for ax, rate, title in zip(
-        axes[1:], ["frekvens", "severity", "ren_premie"], ["Frekvens", "Severity", "Ren premie"]
+        axes[1:],
+        ["frekvens", "severity", "ren_premie"],
+        ["Frekvens", "Severity", "Ren premie"],
     ):
         solid = ~table["lavt_volum"]
         ax.scatter(table.loc[solid, rate], y[solid], color=ACCENT, s=28, zorder=3)
         ax.scatter(
-            table.loc[~solid, rate], y[~solid], facecolors="none", edgecolors="#b23a2f", s=35, zorder=3
+            table.loc[~solid, rate],
+            y[~solid],
+            facecolors="none",
+            edgecolors="#b23a2f",
+            s=35,
+            zorder=3,
         )
         if rate == "frekvens":
             error = 1.96 * np.sqrt(table["skadeantall"]) / table["eksponering"]
-            ax.errorbar(table[rate], y, xerr=error, fmt="none", color=ACCENT, alpha=0.55)
+            ax.errorbar(
+                table[rate], y, xerr=error, fmt="none", color=ACCENT, alpha=0.55
+            )
         ax.axvline(portfolio_rates[rate], color=INK_MUTED, linestyle="--", linewidth=1)
         ax.set_yticks(y, table["nivå"].astype(str))
         _style_axes(ax, title, "", title)
-    fig.suptitle("Bilmerke: eksponeringspoolte nivåer (stiplet = portefølje)", x=0.01, ha="left", fontsize=13)
-    fig.text(0.01, 0.005, "Åpne røde punkter: lavt volum; tolk rateestimatene varsomt.", color=INK_MUTED, fontsize=8)
+    fig.suptitle(
+        "Bilmerke: eksponeringspoolte nivåer (stiplet = portefølje)",
+        x=0.01,
+        ha="left",
+        fontsize=13,
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "Åpne røde punkter: lavt volum; tolk rateestimatene varsomt.",
+        color=INK_MUTED,
+        fontsize=8,
+    )
     fig.tight_layout(rect=(0, 0.02, 1, 0.96))
     plt.close(fig)
     return fig
