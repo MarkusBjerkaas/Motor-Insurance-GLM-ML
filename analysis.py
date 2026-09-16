@@ -22,7 +22,6 @@
 # %%
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from IPython.display import display
 from sklearn.model_selection import GroupKFold
@@ -70,6 +69,15 @@ from src.own_damage_descriptives import (
     plot_pure_premium_distribution,
     plot_severity_distribution,
     plot_year_trend,
+)
+from src.model_data import (
+    BRAND_MIN_EXPOSURE,
+    TEST_YEAR,
+    TRAIN_YEARS,
+    add_transparent_predictors,
+    learn_retained_brands,
+    select_own_damage_scope,
+    split_by_year,
 )
 from src.portfolio_visuals import (
     plot_exposure_structure,
@@ -356,10 +364,15 @@ display(pre_split["response_summary"])
 # risikopopulasjon med tilstrekkelig skadevolum for både frekvens- og
 # severitymodellering. Naturlige utvidelser er å gjenta samme analyse separat
 # for de øvrige dekningene.
+#
+# **Hvor koden ligger.** Avgrensningen gjøres av `select_own_damage_scope` i
+# `src/model_data.py`. Funksjonen filtrerer på nøyaktig regelen over:
+# `property_damage_premium > 0` og `total_exposure > 0`. Den ligger i et felles
+# script slik at modelleringsnotebooken `glm_pricing_models` bruker samme
+# populasjon uten å kopiere koden. Selve beslutningen og begrunnelsen står her.
 
 # %%
-own_damage_mask = data["property_damage_premium"].gt(0) & data["total_exposure"].gt(0)
-df = data.loc[own_damage_mask].copy()
+df = select_own_damage_scope(data)
 scope_summary, scope_exceptions = build_own_damage_scope_validation(df)
 display(scope_summary)
 display(scope_exceptions)
@@ -368,7 +381,7 @@ assert df["total_exposure"].gt(0).all()
 
 # %%
 # Som vi ser inneholder kun datasettet de forventede polisetypene etter avgrensningen.
-df['policy_type'].unique()
+df["policy_type"].unique()
 
 # %% [markdown]
 # Valideringen viser hvordan avgrensningen fordeler seg på produkttype og lister
@@ -391,20 +404,18 @@ df['policy_type'].unique()
 # havnet i ulike foldere og gitt et for optimistisk CV-estimat. Testsettet
 # rører vi ikke igjen før endelig evaluering. All videre deskriptiv/
 # eksplorativ analyse av prediktorer bør fra nå av kun bruke `train_pool`.
+#
+# **Hvor koden ligger.** Tidssplitten gjøres av `split_by_year` i
+# `src/model_data.py`, med `TRAIN_YEARS = (2022, 2023)` og `TEST_YEAR = 2024`
+# definert samme sted. Splitten er en ren filtrering på `year` og bruker ingen
+# skadeutfall. `GroupKFold` under er bare en strukturell kontroll av at
+# gruppering på `insured_id` fungerer. Foldene som faktisk brukes til
+# modellvalg (med stokking og fast seed, pluss en tidsfold 2022 → 2023)
+# defineres i `glm_pricing_models`, fordi CV-designet er en del av
+# modelleringen.
+
 
 # %%
-TRAIN_YEARS = [2022, 2023]
-TEST_YEAR = 2024
-
-
-def make_train_test_split(frame, n_splits=5):
-    """Del modellpopulasjonen i en train/CV-pool og en urørt testperiode."""
-    train_pool = frame.loc[frame["year"].isin(TRAIN_YEARS)].copy()
-    test = frame.loc[frame["year"].eq(TEST_YEAR)].copy()
-    cv = GroupKFold(n_splits=n_splits)
-    return train_pool, test, cv
-
-
 def check_group_disjoint_folds(train_pool, cv, groups):
     """Bekreft at ingen insured_id opptrer i både train- og valideringsfold."""
     for fold, (train_idx, val_idx) in enumerate(cv.split(train_pool, groups=groups)):
@@ -418,7 +429,8 @@ def check_group_disjoint_folds(train_pool, cv, groups):
 
 
 # %%
-train_pool, test, cv = make_train_test_split(df, n_splits=5)
+train_pool, test = split_by_year(df, TRAIN_YEARS, TEST_YEAR)
+cv = GroupKFold(n_splits=5)
 split_summary, overlap_summary = build_split_summary(train_pool, test)
 display(split_summary)
 display(overlap_summary)
@@ -482,17 +494,29 @@ display(severity_fit)
 display(
     pd.Series(
         {
-            "Numerisk nulltoleranse i fordelingsdiagnostikk": severity_fit.attrs["zero_tolerance"],
+            "Numerisk nulltoleranse i fordelingsdiagnostikk": severity_fit.attrs[
+                "zero_tolerance"
+            ],
             "Eksakte null-severity": severity_fit.attrs["exact_zero_count"],
-            "Nærnuller klassifisert som null kun i diagnostikk": severity_fit.attrs["near_zero_count"],
+            "Nærnuller klassifisert som null kun i diagnostikk": severity_fit.attrs[
+                "near_zero_count"
+            ],
             "Minste substantielle positive severity": (
                 train_pool.loc[train_pool["property_claims"].gt(0), "property_incurred"]
-                .div(train_pool.loc[train_pool["property_claims"].gt(0), "property_claims"])
+                .div(
+                    train_pool.loc[
+                        train_pool["property_claims"].gt(0), "property_claims"
+                    ]
+                )
                 .loc[lambda values: values.gt(severity_fit.attrs["zero_tolerance"])]
                 .min()
             ),
-            "Normalitetstest for log(severity), statistikk": severity_fit.attrs["normality_stat"],
-            "Normalitetstest for log(severity), p-verdi": severity_fit.attrs["normality_pvalue"],
+            "Normalitetstest for log(severity), statistikk": severity_fit.attrs[
+                "normality_stat"
+            ],
+            "Normalitetstest for log(severity), p-verdi": severity_fit.attrs[
+                "normality_pvalue"
+            ],
         },
         name="Verdi",
     ).to_frame()
@@ -505,7 +529,7 @@ display(plot_severity_distribution(train_pool, severity_fit))
 # n avviser ofte små avvik og skal ikke velge modell alene; Q-Q, haletilpasning
 # og senere out-of-sample deviance/kalibrering veier tyngre.
 #
-# Lognormal fordelingen bommer fremdeles betydelig i halen. Dette motiverer en vurdering av å modellere storskader og 
+# Lognormal fordelingen bommer fremdeles betydelig i halen. Dette motiverer en vurdering av å modellere storskader og
 
 # %% [markdown]
 # ## 15. Ren premie (severity × frekvens)
@@ -524,15 +548,24 @@ display(pure_premium_fit)
 display(
     pd.Series(
         {
-            "Numerisk nulltoleranse i fordelingsdiagnostikk": pure_premium_fit.attrs["zero_tolerance"],
+            "Numerisk nulltoleranse i fordelingsdiagnostikk": pure_premium_fit.attrs[
+                "zero_tolerance"
+            ],
             "Eksakte nuller i ren premie": pure_premium_fit.attrs["exact_zero_count"],
-            "Nærnuller klassifisert som null kun i diagnostikk": pure_premium_fit.attrs["near_zero_count"],
+            "Nærnuller klassifisert som null kun i diagnostikk": pure_premium_fit.attrs[
+                "near_zero_count"
+            ],
             "Minste substantielle positive ren premie": (
                 train_pool["property_incurred"] / train_pool["total_exposure"]
-            ).loc[lambda values: values.gt(pure_premium_fit.attrs["zero_tolerance"])]
+            )
+            .loc[lambda values: values.gt(pure_premium_fit.attrs["zero_tolerance"])]
             .min(),
-            "Normalitetstest for log(positiv ren premie), statistikk": pure_premium_fit.attrs["normality_stat"],
-            "Normalitetstest for log(positiv ren premie), p-verdi": pure_premium_fit.attrs["normality_pvalue"],
+            "Normalitetstest for log(positiv ren premie), statistikk": pure_premium_fit.attrs[
+                "normality_stat"
+            ],
+            "Normalitetstest for log(positiv ren premie), p-verdi": pure_premium_fit.attrs[
+                "normality_pvalue"
+            ],
         },
         name="Verdi",
     ).to_frame()
@@ -598,51 +631,50 @@ display(
 # 1000 / power_to_weight_ratio` snur kildens kg-per-hk-mål: høyere verdi betyr
 # flere hestekrefter per tonn og dermed høyere ytelse. Bare positive inputverdier
 # transformeres; manglende input forblir manglende.
+#
+# **Hvor koden ligger.** Begge stegene ligger i `src/model_data.py`, slik at
+# modelleringsnotebooken får identiske prediktorer:
+#
+# - `learn_retained_brands(train_pool, min_exposure=500.0)` summerer
+#   `total_exposure` per `vehicle_brand` i `train_pool` og returnerer merkene over
+#   grensen sammen med eksponeringen per merke.
+# - `add_transparent_predictors(frame, retained_brands)` lager
+#   `driving_experience_years`, `log_vehicle_value`, `performance_hp_per_tonne`
+#   og `vehicle_brand_pooled` etter reglene over.
+#
+# Kontrollene under ligger fortsatt i notebooken og bekrefter at resultatet
+# følger reglene.
 
 # %%
-BRAND_MIN_EXPOSURE = 500.0
-brand_exposure_train = train_pool.groupby("vehicle_brand", observed=True)[
-    "total_exposure"
-].sum()
-retained_brands = brand_exposure_train.loc[
-    brand_exposure_train.ge(BRAND_MIN_EXPOSURE)
-].index.astype(str)
-
-
-def add_transparent_predictors(frame, retained_brand_levels):
-    """Legg til kun forhåndsdefinerte, ikke-responsbaserte prediktorer."""
-    transformed = frame.copy()
-    transformed["driving_experience_years"] = (
-        transformed["driver_age"] - transformed["age_driving_licence"]
-    )
-    transformed["log_vehicle_value"] = np.log(transformed["vehicle_value"])
-    transformed["performance_hp_per_tonne"] = 1000 / transformed[
-        "power_to_weight_ratio"
-    ]
-    observed_brand = transformed["vehicle_brand"].astype("string")
-    transformed["vehicle_brand_pooled"] = observed_brand.where(
-        observed_brand.isin(retained_brand_levels), "OTHER"
-    ).astype("category")
-    return transformed
-
-
+retained_brands, brand_exposure_train = learn_retained_brands(
+    train_pool, min_exposure=BRAND_MIN_EXPOSURE
+)
 train_pool = add_transparent_predictors(train_pool, retained_brands)
 test = add_transparent_predictors(test, retained_brands)
 assert train_pool["driving_experience_years"].ge(0).all()
 assert test["vehicle_brand_pooled"].isin([*retained_brands, "OTHER"]).all()
-assert train_pool.loc[
-    train_pool["power_to_weight_ratio"].notna(), "power_to_weight_ratio"
-].gt(0).all()
-assert train_pool["performance_hp_per_tonne"].isna().eq(
-    train_pool["power_to_weight_ratio"].isna()
-).all()
+assert (
+    train_pool.loc[train_pool["power_to_weight_ratio"].notna(), "power_to_weight_ratio"]
+    .gt(0)
+    .all()
+)
+assert (
+    train_pool["performance_hp_per_tonne"]
+    .isna()
+    .eq(train_pool["power_to_weight_ratio"].isna())
+    .all()
+)
 unseen_test_brands = set(test["vehicle_brand"].astype(str)) - set(
     train_pool["vehicle_brand"].astype(str)
 )
-assert test.loc[
-    test["vehicle_brand"].astype(str).isin(unseen_test_brands),
-    "vehicle_brand_pooled",
-].eq("OTHER").all()
+assert (
+    test.loc[
+        test["vehicle_brand"].astype(str).isin(unseen_test_brands),
+        "vehicle_brand_pooled",
+    ]
+    .eq("OTHER")
+    .all()
+)
 feature_summary = pd.Series(
     {
         "Merker beholdt ved minst 500 eksponeringsår": len(retained_brands),
@@ -651,7 +683,9 @@ feature_summary = pd.Series(
             / brand_exposure_train.sum()
             * 100
         ),
-        "Testmerker mappet til OTHER": int(test["vehicle_brand_pooled"].eq("OTHER").sum()),
+        "Testmerker mappet til OTHER": int(
+            test["vehicle_brand_pooled"].eq("OTHER").sum()
+        ),
         "Usette testmerker mappet til OTHER": len(unseen_test_brands),
     },
     name="Verdi",
@@ -666,7 +700,9 @@ display(age_diagnostics["temporal_changes"])
 display(age_diagnostics["plausibility"])
 display(plot_age_diagnostics(age_diagnostics))
 assert age_diagnostics["plausibility"].loc["negativ_utledet_erfaring", "Verdi"] == 0
-assert age_diagnostics["plausibility"].loc["førerkortalder_over_føreralder", "Verdi"] == 0
+assert (
+    age_diagnostics["plausibility"].loc["førerkortalder_over_føreralder", "Verdi"] == 0
+)
 
 # %% [markdown]
 # **Konklusjon.** Residualen `driver_age - age_driving_licence - vehicle_age`
@@ -733,8 +769,7 @@ categorical_one_way = {
     for column in CATEGORICAL_VARS[:-1]
 }
 numeric_one_way = {
-    column: build_numeric_one_way(train_pool, column)
-    for column in NUMERIC_VARS
+    column: build_numeric_one_way(train_pool, column) for column in NUMERIC_VARS
 }
 display(plot_one_way_grid(categorical_one_way, train_pool, "kategoriske"))
 display(plot_one_way_grid(numeric_one_way, train_pool, "numeriske"))
@@ -762,10 +797,12 @@ display(association_matrix)
 display(plot_categorical_association_heatmap(association_matrix))
 
 # %%
-display(plot_numeric_by_category_boxplot(train_pool, "log_vehicle_value", "policy_type"))
+display(
+    plot_numeric_by_category_boxplot(train_pool, "log_vehicle_value", "policy_type")
+)
 
 # %%
-df['property_claims'].unique()
+df["property_claims"].unique()
 
 # %% [markdown]
 # # 23. Oppsummering og konsekvenser for modelleringen

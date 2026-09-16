@@ -8,8 +8,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "set -eu; if [ /workspaces/MotorForsikring/analysis.ipynb -nt /workspaces/MotorForsikring/analysis.py ]; then uv run --project /workspaces/MotorForsikring jupytext --to py:percent --output /workspaces/MotorForsikring/analysis.py /workspaces/MotorForsikring/analysis.ipynb; fi",
-            "statusMessage": "Syncing analysis.py from analysis.ipynb..."
+            "command": "set -eu; for nb in analysis glm_pricing_models; do p=/workspaces/MotorForsikring/$nb; if [ -f $p.ipynb ] && [ $p.ipynb -nt $p.py ]; then uv run --project /workspaces/MotorForsikring jupytext --to py:percent --output $p.py $p.ipynb; fi; done",
+            "statusMessage": "Syncing notebook .py files from .ipynb..."
           }
         ]
       }

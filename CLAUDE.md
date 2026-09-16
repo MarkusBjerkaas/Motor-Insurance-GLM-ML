@@ -13,10 +13,16 @@ GLM/ML/credibility-modellering på motorforsikringsdata. Portefølje-prosjekt fo
 ## Filstruktur
 
 - `analysis.ipynb` — hoveddokumentet. Alt av modellspesifikasjon, loss-funksjoner og kritisk feature engineering skal ligge her (eller importeres og kjøres her). Dette er det som skal vise hva jeg kan, så det kritiske hører hjemme her, ikke gjemt i en script-fil.
+- `glm_pricing_models.ipynb` — modelleringsnotebook for GLM-benchmarken på egen skade (fase 1–4: frekvens, severity/storskader, todelt modell mot Tweedie, konsolidert benchmark). All kode for modellspesifikasjoner og CV-definisjon skrives her; diagnostikk, tabeller og plott kan ligge i `src/` og importeres. Inneholder et beslutningsregister (B-xx) som skal holdes oppdatert.
+- `bonus_score_analysis.ipynb` — separat diagnostikk av tidsplasseringen til `bonus_score`.
+- `src/model_data.py` — felles datagrunnlag (avgrensning, tidssplitt, merke-pooling, transparente prediktorer) brukt av både `analysis` og `glm_pricing_models`. Endringer her må verifiseres ved å kjøre begge notebooks.
+- `plans/` — styringsdokumenter for modelleringsløpet, f.eks. `plans/glm_pricing_models_plan.md`. **Planen er levende: ved starten av hver ny fase skal den leses, revurderes mot resultatene fra forrige fase og skrives om ved behov.** Hver revurdering logges i planens endringslogg (også når ingenting endres), og vesentlige endringer legges frem for meg før implementeringen starter.
 - `src/` — scripts som brukes og kjøres fra notebooken. Navngi beskrivende (f.eks. `clean_data.py`, ikke `utils.py`). Lange kodeblokker som ikke er sentrale for analysen (f.eks. data cleaning) flyttes hit og importeres inn i notebooken.
 - `src_temp/` — engangs-testscripts som ikke trenger å dokumenteres eller has med i git-historikken.
 
 ## Notebook-workflow — viktig
+
+Gjelder alle jupytext-parede notebooks (`analysis`, `glm_pricing_models`, `bonus_score_analysis`); `analysis` brukes som eksempel under.
 
 Rediger **aldri** `analysis.ipynb` direkte. Rediger alltid `analysis.py` (jupytext percent-format, `# %%`-celler), som er et 1:1-speil av notebooken i ren tekst. Dette er hovedsakelig for token-effektivitet — `.ipynb`-JSON er dyrt å lese og skrive.
 
