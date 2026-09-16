@@ -5,7 +5,7 @@
 Den deskriptive analysen i `analysis.py` er ferdig. Seksjon 23 foreslår et første GLM-løp. Neste steg er en egen modelleringsnotebook som:
 1. begrunner metrikkvalget ut fra dette datasettet og litteraturen,
 2. gjennomfører fase 1 (frekvens), fase 2 (severity og storskader), fase 3 (todelt modell mot Tweedie) og fase 4 (konsolidert benchmark),
-3. dokumenterer alle beslutninger i et beslutningsregister som brukeren kan ta stilling til i etterkant.
+3. dokumenterer beslutningene løpende og låser styrende valg før kandidatmodellene estimeres.
 
 Resultatet er en fryst, transparent GLM-benchmark som senere ML-modeller skal slå.
 
@@ -78,12 +78,13 @@ Gjenbruk: `clean_motor_data`, `build_variable_dictionary` (`src/data_quality.py`
 
 **CV-design (definert i notebooken):**
 - `GroupKFold(n_splits=5, shuffle=True, random_state=100)` på `insured_id`. Uten shuffle fordeles like store grupper etter id-rekkefølge, og id-rekkefølgen kan henge sammen med tegningstidspunkt (Roberts et al. 2017).
-- Tidsfold 2022 → 2023 som sensitivitet.
+- Tidsfold 2022 → 2023 som obligatorisk robusthetskontroll, ikke som et nytt optimaliseringssett.
 - Alt som avhenger av data læres **inne i treningsfolden**: imputasjonsmedianer, spline-knuter (patsy stateful `cr()`), NB-α, Tweedie-p og storskadetillegget λ.
 - Fold-assert om disjunkte grupper.
 
-**Seleksjonsregel (låses før første fit):**
-- En blokk beholdes når gjennomsnittlig parvis forbedring i fold-deviance er større enn én standardfeil (1-SE-regelen, Hastie et al. 2009), og fortegnet på hovedeffektene er det samme i alle 5 foldene.
+**Seleksjonsregel (låst før første kandidatfit i fase 1):**
+- En blokk beholdes når samlet vektet OOF-gevinst er positiv, gjennomsnittlig parvis forbedring i fold-deviance er større enn én standardfeil (1-SE-regelen, Hastie et al. 2009), og minst 4 av 5 folder forbedres.
+- Stabilitet vurderes på riktig skala: fortegn for enkle lineære ledd, eksponeringsstøttede relativiteter for kategorier og predikert kurve i sentrale 95 % for splines. Innen 1 SE velges enkleste modell. Fullmodellen får en bakoversjekk blokk for blokk; interaksjoner inngår ikke.
 - p-verdier og one-way-rater er ikke seleksjonskriterier.
 - Begrensning: med 5 folder er standardfeilen grov.
 
@@ -121,7 +122,7 @@ Planen for fase 2–4 bygger på antakelser som først testes i fasen før. For 
 - **3.1 Poisson-basis** med `policy_type + C(year)`. Pearson φ̂, Cameron–Trivedi og rootogram.
 - **3.2 Blokkvis fremoverseleksjon** i forhåndsbestemt rekkefølge:
   - B1 `policy_type + year`
-  - B2 `bonus_score`
+  - B2 `bonus_score`, bare dersom as-of-porten i B-13 er bestått
   - B3 `cr(log_vehicle_value)` og `cr(performance_hp_per_tonne)`
   - B4 `cr(driver_age)` **eller** `cr(driving_experience_years)` (B-11)
   - B5 `fuel_type`, `municipality_type`, `circulation_area`, `payment_frequency`, `business_type`
@@ -132,7 +133,8 @@ Planen for fase 2–4 bygger på antakelser som først testes i fasen før. For 
 - **3.3 Form på kontinuerlige ledd:** lineært mot `cr(df=3)` mot `cr(df=4)`, valgt på OOF-deviance.
 - **3.4 NB2** (`smf.negativebinomial` med `exposure`) med samme variabelsett. Sammenlignes med OOF Poisson-deviance på middelverdien og OOF NB-log-score. Beslutningsregel B-23: NB velges bare hvis den forbedrer middelverdi-scoren. Ellers brukes Poisson med Pearson-skalert, cluster-robust inferens.
 - **3.5 Sensitiviteter:**
-  - uten `bonus_score` (obligatorisk)
+  - dersom bonus består as-of-porten: uten `bonus_score` (obligatorisk)
+  - dersom bonus ikke består as-of-porten: hovedmodell uten bonus; eventuell modell med bonus vises bare som tydelig merket, potensielt lekkende sensitivitet
   - lagget skadehistorikk på 2023-rader med observasjon året før, via `build_bonus_lagged_panel`, i fire varianter: basis, +lag, +bonus og +begge
   - uten kansellerte (B-01), med sammenligning av nivå og relativiteter
   - fri log(e)-koeffisient
@@ -182,27 +184,27 @@ Planen for fase 2–4 bygger på antakelser som først testes i fasen før. For 
 | ID | Beslutning | Status |
 |---|---|---|
 | B-01 | Alle egen-skade-poliseår inkludert kansellerte, fast log(e)-offset, sensitivitet uten C | Brukerbesluttet |
-| B-02 | `policy_status` brukes aldri som prediktor | Foreslått |
+| B-02 | Bare opplysninger kjent ved periodestart/fornyelse er kvalifisert; `policy_status` brukes aldri som prediktor | Brukerbesluttet |
 | B-03 | Frekvensrespons = skadeantall; pukkelen dokumenteres; Tweedie som kontroll | Brukerbesluttet |
 | B-04 | Datagrunnlaget ligger i `src/model_data.py` og dokumenteres i begge notebooks | Brukerbesluttet |
-| B-05 | 2024 brukes ikke i GLM-fasen; felles sluttevaluering med ML | Foreslått |
-| B-06 | GroupKFold(5, shuffle, seed 100) på `insured_id` pluss tidsfold 2022→2023 | Foreslått |
-| B-07 | Primærmetrikker: Poisson-, Gamma- og Tweedie-deviance, vektet og OOF | Foreslått |
-| B-08 | 1-SE-regel og fortegnsstabilitet; p-verdier velger ikke variabler | Foreslått |
+| B-05 | 2024 åpnes én gang for felles sluttevaluering etter at GLM og ML er frosset | Brukerbesluttet |
+| B-06 | GroupKFold(5, shuffle, seed 100) på `insured_id` velger modell; tidsfold 2022→2023 er obligatorisk robusthetskontroll | Brukerbesluttet |
+| B-07 | Pooled vektet OOF-deviance er primær; overstyring krever dokumentert materiell og systematisk svikt i forhåndsdefinert diagnostikk | Brukerbesluttet |
+| B-08 | Positiv pooled gevinst, parvis gevinst > 1 SE, minst 4/5 folder, typepasset stabilitet, bakoversjekk og enkleste modell innen 1 SE | Brukerbesluttet |
 | B-09 | `fuel_type` får egen kategori MISSING; numeriske variabler imputeres med median lært i folden | Foreslått |
-| B-10 | Naturlige kubiske splines (df 3/4) mot lineære ledd, valgt på OOF | Datadrevet |
-| B-11 | `driver_age` eller `driving_experience_years` som alternativer, ikke begge | Foreslått / Datadrevet |
-| B-12 | `year` som kategorisk kontroll, ikke offset eller trend | Foreslått |
-| B-13 | Bonus med hvis OOF-gevinst; obligatorisk sensitivitet uten; sjekk av lagget historikk | Foreslått / Datadrevet |
-| B-14 | Merke-pooling ≥500 eksponeringsår lært på train_pool (bare eksponering); sensitivitet med 250 og 1 000 | Foreslått |
-| B-15 | Nullkostnadsskader utelates fra severity og beholdes i frekvens | Foreslått |
+| B-10 | Lineær mot naturlige kubiske splines (df 3/4), valgt på OOF; enkleste form innen 1 SE | Brukerbesluttet regel / Datadrevet resultat |
+| B-11 | `driver_age` og `driving_experience_years` testes separat; ikke begge; alder vinner innen 1 SE | Brukerbesluttet regel / Datadrevet resultat |
+| B-12 | `year` som kategorisk kontroll i gruppe-CV, utelatt i tidsfolden; 2023 er benchmarknivå, ikke trendestimat | Brukerbesluttet |
+| B-13 | Bonus krever dokumentert as-of-dato før OOF-seleksjon; ellers bare potensielt lekkende sensitivitet | Brukerbesluttet adgangsregel / Datadrevet resultat |
+| B-14 | Merke-pooling ≥500 eksponeringsår lært på train_pool (bare eksponering); sensitivitet med 250 og 1 000 | Brukerbesluttet |
+| B-15 | Nullskadeår inngår i frekvens, ikke severity; 9 nullkostnadsskader beholdes i frekvens/ren premie og utelates fra Gamma-severity | Brukerbesluttet |
 | B-16 | Gamma med log-link og vekt N; lognormal med smearing som utfordrer | Foreslått / Datadrevet |
 | B-17 | Storskadetersklene 5 000, 7 500 og 10 000 fastsatt på forhånd; kapping på snittskaden | Foreslått |
 | B-18 | Beslutningsregel for separat storskadebehandling | Foreslått / Datadrevet |
 | B-19 | Tweedie-p fra EQL-profil i treningsfolden | Foreslått |
-| B-20 | Premie brukes bare som benchmark i fase 4 | Foreslått |
+| B-20 | Premie brukes bare som benchmark i fase 4, aldri som prediktor | Brukerbesluttet |
 | B-21 | Cluster-robuste standardfeil på `insured_id` | Foreslått |
-| B-22 | Prediksjon ved e=1 og årsnivå 2023 | Foreslått |
+| B-22 | Prediksjon ved e=1 og årsnivå 2023 som benchmarknivå, ikke fremtidig trendestimat | Brukerbesluttet |
 | B-23 | NB velges bare ved bedre OOF-score på middelverdien | Foreslått |
 | B-24 | Basisnivå for kategoriske variabler = nivået med størst eksponering (f.eks. `COMP_E`) | Foreslått |
 | B-25 | Tidsfolden bruker spesifikasjoner uten `C(year)`; nivåskiftet vises som global balanse | Foreslått |
@@ -222,6 +224,8 @@ Planen for fase 2–4 bygger på antakelser som først testes i fasen før. For 
 | 2026-09-15 | Planlegging | Første versjon | Brukerens valg: behold kansellerte, tellemodell for frekvens, datagrunnlag i `src/`, fase for fase |
 | 2026-09-15 | Leveranse 0 | La til B-24 (basisnivå), B-25 (tidsfold uten årsledd) og B-26 (rate med vekt). Referansemodeller for alle tre målvariabler, med `paired_improvement` for B-08, er lagt inn allerede i seksjon 2.9. `src/glm_diagnostics.py` startet med `build_fold_summary` og `summarize_cv_scores`. | Implementeringsvalg som oppsto underveis: `C(year)` kan ikke predikere et usett år, og én felles CV-sløyfe krever én responsform. **Til revurdering før fase 1:** årsleddet for severity passerte 1-SE med forbedring i bare 3 av 5 folder. Vurder å skjerpe B-08, f.eks. forbedring i minst 4 av 5 folder. Tidsfolden viser motsatt drift (frekvens −17 %, severity +10 %), noe som påvirker B-22. |
 | 2026-09-16 | Leveranse 0 (opprydding) | `to_model_frame` (dtype-konvertering) flyttet til `src/model_data.py`, `build_data_overview`, `build_glm_summary` og `build_relativity_table` lagt i `src/glm_diagnostics.py`. CV og referansemodeller bygger nå på `glm_spec` → `fit_glm` → `run_glm`/`cross_validate_glm`, der formelen bygges fra dtypes én gang per modell. B-24 brukes også på `year` (basis 2023). Ingen sklearn-`Pipeline`. | Notebooken skal fokusere på modellene. Pipeline ble forkastet fordi statsmodels/patsy-formlene og koeffisientene er det notebooken skal vise, og `prepare_design_frame` allerede lærer alt på treningsfolden. OOF-scorene er uendret. |
+| 2026-09-16 | Leveranse 0 (opprydding) | Nullmodellene estimeres ikke lenger som GLM. Nullnivået vises som `oof_null_deviance` (vektet treningssnitt per fold), og parvis sammenligning nullmodell → `policy_type` bruker `val_null_deviance`. | En intercept-GLM med log-link gir nøyaktig det vektede snittet, så modellfittene var redundante. Tallene er uendret (f.eks. frekvens: forbedring 0,10266, SE 0,00527). |
+| 2026-09-16 | Revurdering før fase 1 | Låste B-02, B-05–B-08, B-10–B-15, B-20 og B-22. Skjerpet seleksjonen til positiv pooled OOF-gevinst, >1 SE og minst 4/5 forbedrede folder; innførte typepasset stabilitet og enkleste modell innen 1 SE. Bonus fikk en as-of-port. | Referansemodellene viste at 1-SE alene kunne passeres med bare 3/5 forbedrede folder og at kalenderdrift må skilles fra variabelseleksjon. Brukerbeslutningene er samlet i notebookens seksjon 2.10. Planen for fase 1 beholdes ellers uendret. |
 
 ## Utenfor omfang nå
 GBM og GAM, credibility for merke, ekstremverditeori (GPD) utover mean excess-plottet, dispersjonsmodellering (DGLM), interaksjoner i mestermodellen og all evaluering på 2024.

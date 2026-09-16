@@ -137,18 +137,30 @@ def summarize_cv_scores(fold_scores):
     """Oppsummer fold-scorene per modell.
 
     ``fold_scores`` har én rad per (modell, fold), som returnert av
-    ``cross_validate_glm``. Standardfeilen er fold-standardavviket delt på
-    roten av antall folder. Med fem folder er den et grovt mål.
+    ``cross_validate_glm``. OOF-målene pooles med målvariabelens vekter;
+    standardfeilen er fold-standardavviket delt på roten av antall folder.
+    Med fem folder er den et grovt mål.
     """
-    grouped = fold_scores.groupby("model", sort=False)
-    n_folds = grouped.size()
-    return pd.DataFrame(
-        {
-            "folder": n_folds,
-            "train_deviance": grouped["train_deviance"].mean(),
-            "oof_deviance": grouped["val_deviance"].mean(),
-            "oof_deviance_se": grouped["val_deviance"].std(ddof=1) / np.sqrt(n_folds),
-            "oof_d2": grouped["val_d2"].mean(),
-            "oof_balanse": grouped["val_balance"].mean(),
-        }
-    )
+    rows = []
+    for model, scores in fold_scores.groupby("model", sort=False):
+        oof_deviance = np.average(scores["val_deviance"], weights=scores["val_weight"])
+        oof_null_deviance = np.average(
+            scores["val_null_deviance"], weights=scores["val_weight"]
+        )
+        rows.append(
+            {
+                "model": model,
+                "folder": len(scores),
+                "train_deviance": np.average(
+                    scores["train_deviance"], weights=scores["train_weight"]
+                ),
+                "oof_null_deviance": oof_null_deviance,
+                "oof_deviance": oof_deviance,
+                "oof_deviance_se": scores["val_deviance"].std(ddof=1)
+                / np.sqrt(len(scores)),
+                "oof_d2": 1 - oof_deviance / oof_null_deviance,
+                "oof_balanse": scores["val_predicted"].sum()
+                / scores["val_actual"].sum(),
+            }
+        )
+    return pd.DataFrame(rows).set_index("model")
