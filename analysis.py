@@ -65,6 +65,7 @@ from src.own_damage_descriptives import (
     plot_numeric_by_category_boxplot,
     plot_numeric_correlation_heatmap,
     plot_numeric_predictor_histograms,
+    plot_one_way,
     plot_one_way_grid,
     plot_pure_premium_distribution,
     plot_severity_distribution,
@@ -443,6 +444,59 @@ display(overlap_summary)
 
 # %%
 check_group_disjoint_folds(train_pool, cv, train_pool["insured_id"])
+
+# %% [markdown]
+# ## 12.1 Policy status: diagnostikk, ikke prediktor
+#
+# `policy_status` er `A` for aktiv og `C` for kansellert/opphørt. Tabellen og
+# plottet er begrenset til train-poolen og viser **rå, eksponeringsvektede**
+# forskjeller. Kansellerte poliser har nesten tre ganger så høy frekvens og ren
+# premie som aktive, mens severity er nær lik. Forskjellen i ren premie drives
+# dermed av frekvens, ikke skadebeløp per skade.
+#
+# Samtidig har alle kansellerte poliseår delårseksponering. Dette kan være
+# seleksjon knyttet til opphør i løpet av året, og statusen kan også være kjent
+# først etter prisingsdatoen eller påvirket av en skade. `policy_status` brukes
+# derfor kun som diagnostikk og holdes utenfor modellene. Før en eventuell
+# revurdering må tidspunktet statusen fastsettes på dokumenteres.
+
+# %%
+policy_status_one_way = build_categorical_one_way(train_pool, "policy_status")
+policy_status_short_exposure = (
+    train_pool.assign(delår=train_pool["total_exposure"].lt(1))
+    .groupby("policy_status", observed=True)["delår"]
+    .mean()
+    .mul(100)
+    .rename("andel_delårseksponering_prosent")
+    .reset_index()
+    .rename(columns={"policy_status": "nivå"})
+)
+policy_status_summary = (
+    policy_status_one_way.merge(policy_status_short_exposure, on="nivå", how="left")
+    .rename(columns={"nivå": "status"})
+    .loc[
+        :,
+        [
+            "status",
+            "poliseår",
+            "eksponering",
+            "andel_delårseksponering_prosent",
+            "frekvens",
+            "severity",
+            "ren_premie",
+        ],
+    ]
+    .round(2)
+)
+display(policy_status_summary)
+display(
+    plot_one_way(
+        policy_status_one_way,
+        "Policy status: eksponering og skadefrekvens",
+        rate_column="frekvens",
+        rate_label="Frekvens (skader per poliseår)",
+    )
+)
 
 # %% [markdown]
 # # Deskriptiv analyse av modellvariablene
