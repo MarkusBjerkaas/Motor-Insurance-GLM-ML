@@ -42,6 +42,14 @@
 # Teståret 2024 åpnes ikke i denne notebooken (B-05). All modellsammenligning
 # gjøres out-of-fold innenfor 2022–2023.
 #
+# **Tolkning etter revurderingen før fase 1 (B-27).** Dette er en
+# metodebenchmark med timingforbehold. Kilden beholder siste registrering per
+# polise og år etter kontraktsendringer, ikke dokumenterte startverdier.
+# Plausible risikofelt kan derfor brukes til metodearbeidet, men resultatene
+# er ikke dokumentert lekkasjefri prediksjonsytelse ved nytegning/fornyelse.
+# Bonus, status og premier er fortsatt utelukket fra hovedmodellens
+# prediktorer. Se [kildens dataprosessering](https://pmc.ncbi.nlm.nih.gov/articles/PMC13234478/).
+#
 # **Beslutningsregister.** Alle valg som påvirker resultatet har en ID (B-xx)
 # og er samlet i seksjon 7. Teksten henviser til ID-en der beslutningen brukes.
 # Statusene betyr:
@@ -295,8 +303,9 @@ display(
 # - **RMSE** på rater domineres av korte eksponeringer. Den høyeste annualiserte
 #   renpremien i train-poolen er om lag 1,19 mill. EUR.
 # - **R²** har ingen klar tolkning når nesten 90 % av responsene er null.
-# - **AIC/BIC** kan bare sammenligne nøstede modeller med samme likelihood og
-#   samme data. De brukes bare som kontroll.
+# - **AIC/BIC** krever sammenlignbare likelihoods på samme respons og rader;
+#   modellene trenger ikke være nøstede. De brukes bare som kontroll, ikke til
+#   variabelvalg eller til sammenligning av antalls- og rate-likelihood.
 
 # %% [markdown]
 # ### 2.5 CV-design (B-06)
@@ -320,7 +329,9 @@ display(
 # - **Alt som læres fra data, læres inne i treningsfolden:**
 #   imputasjonsmedianer, spline-knuter (patsy `cr()` er stateful og gjenbruker
 #   knutene fra trening ved prediksjon), NB-α, Tweedie-$p$ og
-#   storskadetillegget $\lambda$.
+#   storskadetillegget $\lambda$. Eksponeringsbasert merkeliste og
+#   kategorireferanser er eksplisitte unntak i gruppe-CV (B-14/B-24).
+#   Dersom merke inngår i fase 1, læres tidsfoldens merkeliste fra 2022 alene.
 #
 # Foldene defineres som indeksmengder. Da kan de samme foldene brukes både på
 # hele modellrammen og på severity-delmengden, og alle modeller for samme
@@ -590,7 +601,7 @@ def cross_validate_glm(spec, data, folds):
 # %% [markdown]
 # ### 2.8 Seleksjonsregel, låst før første modell (B-08)
 #
-# En variabelblokk tas inn når alle disse er oppfylt:
+# En mer kompleks utfordrer kvalifiserer når alle disse er oppfylt:
 #
 # 1. **Gevinsten er større enn støyen:** gjennomsnittlig parvis forbedring i
 #    OOF-deviance over de fem foldene er større enn én standardfeil av
@@ -607,10 +618,20 @@ def cross_validate_glm(spec, data, folds):
 #
 # p-verdier og one-way-rater brukes ikke til å velge variabler. Med 56 084 rader
 # blir nesten alt signifikant, og one-way-rater er forvridd av samvariasjon.
-# Kandidatblokkene testes i den forhåndsbestemte rekkefølgen i faseplanen, uten
-# interaksjoner, og fullmodellen får en bakoversjekk blokk for blokk. Når to
-# kandidater ligger innenfor én standardfeil, velges den enkleste. Med fem
-# folder er standardfeilen grov; derfor rapporteres foldresultatene alltid.
+# Faseplanen starter med en samlet forhåndsdefinert kjerne. Lineær form og
+# sentrerte naturlige splines df=3/4 testes før kontinuerlige variabler kan
+# forkastes. Ablasjon viser hele blokkers betingede bidrag; merke og grupperte
+# seter testes deretter som sekundære blokker. Kontrollert reduksjon må ligge
+# innen parvis 1 SE av både gjeldende modell og den faste fullmodellen, slik
+# at flere små tap ikke summeres til et stort tap. Produkt og år beholdes.
+# Bare de to avgrensede produktinteraksjonene i B-28 kan senere kvalifisere.
+# Detaljert algoritme og tie-break står i faseplanens seksjon 3.3–3.7.
+#
+# Med fem folder er standardfeilen grov, og foldenes treningssett overlapper.
+# Dette er en seleksjonsheuristikk, ikke en signifikanstest. Gjenbruk av de
+# samme foldene til flere valg gir seleksjonsoptimisme; finalistens OOF-score
+# er en utviklingsscore. Svake nær-null-ledd flagges for ablasjon og skal ikke
+# alene stanse den brede kjernen før reduksjonen får virke.
 
 
 # %%
@@ -856,12 +877,14 @@ display(
 #    eksponeringsår i hele dekningspopulasjonen, inklusive senere kansellerte.
 #    Nullskadeår er nødvendige i frekvensen, mens severity per definisjon bare
 #    bruker skadeår med positiv kostnad (B-01, B-03, B-15 og B-26).
-# 2. **Hva kunne vært kjent ved prising?** En prediktor slipper bare inn hvis
-#    den er kjent ved periodens start eller det definerte fornyelsestidspunktet.
-#    Dette er en adgangsregel før OOF-seleksjon: god prediksjon kan ikke reparere
-#    target leakage. `bonus_score` må derfor bestå as-of-kontrollen i
-#    `bonus_score_analysis`; ellers kan den bare vises som sensitivitet (B-02,
-#    B-13 og B-20).
+# 2. **Hva kunne vært kjent ved prising?** En prospektiv tariff krever
+#    opplysninger kjent ved periodestart/fornyelse. Kilden beholder imidlertid
+#    siste årsregistrering, så dette er ikke dokumentert for sammeårs
+#    risikofelter. Brukeren har valgt å fortsette som metodebenchmark med
+#    tydelig timingforbehold (B-02/B-27). Det åpner ikke for `policy_status`,
+#    premier eller samtidige skadeutfall. `bonus_score` er fortsatt ute fordi
+#    den særskilte as-of-porten ikke er bestått (B-13/B-20). God OOF-score
+#    kan aldri dokumentere fravær av tidsmessig lekkasje.
 # 3. **Hvordan avgjøres hva som generaliserer?** Gruppe-CV velger variabler og
 #    form, tidsfolden utfordrer robustheten, og 2024 holdes lukket til både GLM
 #    og ML er frosset. Pooled OOF-deviance er primær, mens foldene viser
@@ -874,12 +897,13 @@ display(
 # | Område | Låst regel før fase 1 | Hvorfor den er viktig nå |
 # |---|---|---|
 # | Respons og populasjon | Alle dekkede poliseår beholdes. Nullskadeår inngår i frekvens, ikke severity. De 9 registrerte nullkostnadsskadene inngår i frekvens og ren premie, men ikke Gamma-severity. Incurred behandles som beste tilgjengelige kostnadsestimat; ukjent skadeutvikling oppgis som begrensning. | Hindrer at estimatet endres etter at vanskelige observasjoner eller relativiteter er sett. |
-# | Informasjonstidspunkt | Bare opplysninger kjent ved periodestart/fornyelse er kvalifisert. Bonus tas inn i hovedmodellen bare ved dokumentert as-of-dato; status og eksisterende premie er aldri prediktorer. | CV beskytter ikke mot en variabel som allerede inneholder periodens skadeutfall. |
+# | Informasjonstidspunkt | Metodebenchmark med eksplisitt timingforbehold for siste årsregistrering. Prospektiv tariffstatus krever dokumenterte startverdier. Bonus er ute uten dokumentert as-of-dato; status, premie og samtidige skadeutfall er aldri prediktorer. | At et felt normalt innhentes ved tegning, beviser ikke at årets siste registrering var kjent da. CV reparerer ikke dette. |
 # | Validering | Fem gruppefolder er primære; 2022 → 2023 er obligatorisk robusthetskontroll; 2024 åpnes én gang etter at GLM og ML er frosset. `year` er kontroll i gruppe-CV, men utelates i tidsfolden. | Skiller generalisering mellom poliser, kalenderdrift og en reell fremtidstest. |
-# | Blokkseleksjon | Fast rekkefølge, ingen interaksjoner, positiv pooled gevinst, parvis gevinst > 1 SE og forbedring i minst 4/5 folder; deretter bakoversjekk. | Reduserer rekkefølgefrihet og tilfeldige funn fra gjentatt bruk av de samme foldene. |
+# | Blokkseleksjon | Samlet kjerne, formvalg før ablasjon, sekundære blokker og kontrollert reduksjon. Oppgradering krever positiv pooled gevinst, parvis gevinst > 1 SE og minst 4/5 forbedrede folder. Bare to avgrensede interaksjoner etter B-28. | Vurderer betinget informasjon og gir ikke-lineære effekter en sjanse før variabler forkastes. |
 # | Stabilitet og enkelhet | Lineære ledd vurderes på fortegn, kategorier på eksponeringsstøttede relativiteter og splines på kurven i sentrale 95 %. Innen 1 SE velges enkleste modell. | Koeffisientfortegn betyr ikke det samme for en lineær effekt, en kategori og en spline. |
 # | Beslutningshierarki | Pooled vektet OOF-deviance er primær. Den kan bare overstyres ved en dokumentert, materiell og systematisk svakhet i forhåndsdefinert A/E-, hale-, tids- eller stabilitetsdiagnostikk som en konkurrent tydelig reduserer. Gini, p-verdi og informasjonskriterier kan ikke alene overstyre. | Bevarer en konsistent hovedscore uten å tvinge frem en tariff som svikter på et vesentlig, dokumentert område. |
-# | Kontinuerlige ledd | Lineær, `cr(df=3)` og `cr(df=4)` konkurrerer; enklere form vinner innen 1 SE. Alder og kjøreerfaring testes separat, aldri sammen; alder vinner ved resultat innen 1 SE. Merkegrensen er 500 eksponeringsår, med 250/1 000 som sensitivitet. | Låser tie-break før de mest attraktive kurvene er kjent og begrenser kollinearitet og haleustabilitet. |
+# | Kontinuerlige ledd | Lineær, `cr(df=3, constraints='center')` og `cr(df=4, constraints='center')` konkurrerer i fast rutenett; enklere form vinner innen parvis 1 SE. Bare alder kvalifiserer i hovedstigen; erfaring er sensitivitet. Merkegrensen er 500 eksponeringsår, med 250/1 000 som sensitivitet. | Låser kandidatrom, sikrer identifiserbar splinebasis og skiller prediksjonsstyrke fra uavklart datadefinisjon. |
+# | Fordeling og inferens | NB2 fittes på antall med exposure og scores som rate med samme Poisson-deviance. Cluster-robuste KI brukes; Pearson-dispersjon er separat diagnostikk. | Poissons rate/offset-ekvivalens gjelder ikke generelt NB2, og sandwich-SE skal ikke skaleres dobbelt. |
 #
 # Gamma mot lognormal, Poisson mot NB, Tweedie-$p$ og storskadebehandling er
 # med vilje ikke avgjort her. Dette er datadrevne beslutninger i senere faser,
@@ -918,19 +942,19 @@ display(
 # | ID | Beslutning | Begrunnelse | Status | Seksjon |
 # |---|---|---|---|---|
 # | B-01 | Alle egen-skade-poliseår inkluderes, også kansellerte, med fast $\log e$-offset. Sensitivitet uten kansellerte. | Kansellerte står for 13 % av skadene på 5 % av eksponeringen. Å fjerne dem senker nivået med ca. 9 % og demper relativitetene for bonus N, kvartalsbetaling og portefølje. En tariff må prise poliser som senere kanselleres. | Brukerbesluttet | 1, 3 |
-# | B-02 | Bare opplysninger kjent ved periodestart eller definert fornyelsestidspunkt er kvalifisert. `policy_status` brukes aldri som prediktor. | Status er kjent først etter at perioden er ute og kan påvirkes av skaden selv; OOF-CV beskytter ikke mot tidsmessig lekkasje. | Brukerbesluttet | 1, 2.10 |
+# | B-02 | Periodestart/fornyelse er kravet til en prospektiv tariff. Metodebenchmarken tillater plausible, uverifiserte risikofelt med timingforbehold etter B-27. `policy_status` brukes aldri som prediktor. | Kilden beholder siste årsregistrering. OOF-CV beskytter ikke mot endringer etter prisingsdato; status kan påvirkes av skaden selv. | Brukerbesluttet, presisert 2026-09-16 | 0, 1, 2.10, 3 |
 # | B-03 | Frekvensresponsen er skadeantall. Pukkelen ved N = 4–5 dokumenteres med rootogram. Tweedie er en robust kontroll. | Antall er standard tariffstruktur. Pukkelen kan være registreringspraksis, og Tweedie på kostnad påvirkes ikke av den. | Brukerbesluttet | 3, 5 |
 # | B-04 | Datagrunnlaget ligger i `src/model_data.py` og dokumenteres i begge notebooks. | Én sannhet for populasjon, splitt og prediktorer. | Brukerbesluttet | 1 |
 # | B-05 | 2024 brukes ikke i GLM-fasen og åpnes én gang for felles sluttevaluering etter at GLM og ML er frosset. | Aggregerte 2024-tall er allerede sett. Flere titt svekker testen ytterligere. | Brukerbesluttet | 0, 1, 2.10 |
 # | B-06 | `GroupKFold(5, shuffle=True, random_state=100)` på `insured_id` velger modell. Tidsfold 2022 → 2023 er obligatorisk robusthetskontroll, ikke et nytt optimaliseringssett. | Gruppe-CV gir stabil sammenligning uten id-lekkasje; tidsfolden skiller fremoverskuende svikt fra generell kalenderdrift. | Brukerbesluttet | 2.5, 2.10 |
 # | B-07 | Pooled vektet OOF Poisson-, Gamma- eller Tweedie-deviance er primær. Overstyring krever en dokumentert, materiell og systematisk svakhet i forhåndsdefinert A/E-, hale-, tids- eller stabilitetsdiagnostikk som en konkurrent tydelig reduserer. Gini, p-verdi, AIC eller BIC er aldri nok alene. | Deviance er konsistent for middelverdien, men en tariff skal ikke tvinges gjennom når hovedscoren skjuler en vesentlig og dokumentert praktisk svikt. | Brukerbesluttet | 2.1–2.3, 2.10 |
-# | B-08 | En blokk krever positiv pooled OOF-gevinst, parvis gjennomsnittsgevinst > 1 SE og forbedring i minst 4/5 folder. Fast blokkfølge, typepasset stabilitet, bakoversjekk og enkleste modell innen 1 SE; ingen interaksjoner eller p-verdiutvalg. | Reduserer seleksjonsoptimisme og vurderer lineære ledd, kategorier og splines på meningsfulle skalaer. | Brukerbesluttet | 2.8, 2.10, 3 |
+# | B-08 | Samlet forhåndsdefinert kjerne, formvalg før ablasjon, sekundære tester og kontrollert reduksjon. Oppgradering krever positiv pooled gevinst, parvis gevinst > 1 SE, minst 4/5 folder og stabilitet. Forenkling kontrolleres mot gjeldende og fast fullmodell; bare B-28-interaksjoner. | Begrenset kandidatrom og betingede bidrag reduserer rekkefølgeavhengighet. Femfoldsregelen er en heuristikk; seleksjonsoptimisme består. | Revidert faseplan på brukerens oppdrag; terskler beholdt | 2.8, 2.10, 3 |
 # | B-09 | Manglende kategorier blir `MISSING`. Numeriske variabler imputeres med median lært i treningsfolden. | Få manglende verdier. Enkelt, transparent og uten lekkasje. | Foreslått | 2.6 |
-# | B-10 | Kontinuerlige ledd: lineært mot naturlige kubiske splines `cr(df=3)` og `cr(df=4)`, valgt på OOF. Innen 1 SE velges enklere form (`lineær` før `df=3` før `df=4`). | Fleksibel form tillates når den gir robust gevinst, uten å belønne unødig halevariasjon. | Brukerbesluttet regel / Datadrevet resultat | 2.10, 3 |
-# | B-11 | `driver_age` og `driving_experience_years` testes separat, aldri sammen. Innen 1 SE velges `driver_age`. | Sterkt korrelerte; alder har bedre datadekning og enklere tolkning. | Brukerbesluttet regel / Datadrevet resultat | 2.10, 3 |
+# | B-10 | Lineær mot naturlige splines df=3/4 med `constraints='center'`. Fast rutenett for alder, logverdi og ytelse før endelig ablasjon; enkleste form innen parvis 1 SE. | Ikke-linearitet prøves før variabelen forkastes. Sentrering fjerner overlapp med intercept. | Brukerbesluttet regel / Datadrevet resultat; implementering presisert | 2.10, 3 |
+# | B-11 | `driver_age` er førerkandidaten i hovedstigen. `driving_experience_years` er bare sensitivitet inntil definisjonen er avklart. Aldri begge samtidig. | Erfaring bygger på en uverifisert tolkning og observerte inkonsistenser i førerkortalder. God CV kan ikke avklare semantikken. | Brukerbesluttet 2026-09-16 | 2.10, 3 |
 # | B-12 | `year` er kategorisk kontroll i gruppe-CV, ikke offset eller trend, og utelates i tidsfolden. Prediksjon på 2023-nivå er benchmarknivå, ikke et estimert fremtidig trendnivå. | To år gir ingen trend å estimere, og et ukjent årsnivå kan ikke predikeres direkte. | Brukerbesluttet | 2.5, 2.9–2.10, 3 |
 # | B-13 | `bonus_score` er bare kvalifisert for hovedmodellen dersom `bonus_score_analysis` dokumenterer at verdien var kjent før skadeperioden. Deretter kreves vanlig OOF-gevinst og sensitivitet uten bonus. Uten dokumentert as-of-dato vises bonus bare som potensielt lekkende sensitivitet. | Prediksjonsstyrke kan ikke oppveie target leakage. | Brukerbesluttet adgangsregel / Datadrevet resultat | 2.10, 3 |
-# | B-14 | Merke-pooling ved ≥ 500 eksponeringsår, lært på hele train-poolen fra eksponering alene. Sensitivitet med 250 og 1 000. | Regelen bruker ikke responsen, så den gir ingen responslekkasje. | Brukerbesluttet | 1, 2.10, 3 |
+# | B-14 | Merke-pooling ved ≥ 500 eksponeringsår, lært på hele train-poolen fra eksponering alene i gruppe-CV; 2022 alene i tidsfolden. Sensitivitet med 250 og 1 000. | Regelen bruker ikke responsen. Tidskontrollen skal heller ikke lære merkelisten fra fremtidig porteføljesammensetning. | Brukerbesluttet hovedregel; tidskontroll presisert | 1, 2.10, 3 |
 # | B-15 | Poliseår uten skade inngår i frekvens, ikke severity. De 9 skadeårene med incurred ≤ 0,01 beholdes i frekvens og ren premie, men utelates fra Gamma-severity; utslaget på todelt ren premie kvantifiseres. | Frekvens krever både nuller og skader; Gamma krever positiv respons. | Brukerbesluttet | 1.1, 2.10, 4–5 |
 # | B-16 | Gamma med log-link og vekt $N$. Lognormal med Duan-smearing som utfordrer. | Standard multiplikativ severity. Lognormal kontrollerer halen. | Foreslått / Datadrevet | 4 |
 # | B-17 | Storskadetersklene 5 000, 7 500 og 10 000 EUR er satt på forhånd. Kapping skjer på snittskaden. | Terskler valgt etter responsen ville gitt lekkasje i seleksjonen. | Foreslått | 4 |
@@ -939,7 +963,9 @@ display(
 # | B-20 | `property_damage_premium` brukes bare som benchmark i fase 4, aldri som prediktor. | Premien er dagens tariff og ville lekke eksisterende prisstruktur inn i modellen. | Brukerbesluttet | 2.10, 6 |
 # | B-21 | Cluster-robuste standardfeil på `insured_id`. | Samme polise i to år gir korrelerte observasjoner. | Foreslått | 3–6 |
 # | B-22 | Prediksjon ved $e = 1$ og årsnivå 2023. Dette er benchmarkens siste observerte kalendernivå, ikke et estimert fremtidig nivå. | Gir en sammenlignbar årspremie uten å late som to år identifiserer en trend. | Brukerbesluttet | 2.10, 6 |
-# | B-23 | NB velges bare ved bedre OOF-score på middelverdien. Ellers Poisson med Pearson-skalert, cluster-robust inferens. | Overspredning påvirker usikkerhet, ikke nødvendigvis middelverdien. | Foreslått | 3 |
+# | B-23 | NB2 med antall og eksponering må slå Poisson etter B-08 på samme OOF Poisson-deviance. Ellers Poisson med cluster-robust inferens; Pearson-dispersjon separat, ingen dobbel SE-skalering. | Overspredning alene begrunner ikke bytte av middelverdimodell. Sandwich-KI skal ikke skaleres med Pearson-faktoren en gang til. | Fase-1-presisering av foreslått fordelingsvalg | 3 |
 # | B-24 | Basisnivå for kategoriske variabler er nivået med størst eksponering, f.eks. `COMP_E` for `policy_type`. | Relativiteter mot kjernen av porteføljen blir stabile og lette å lese. Påvirker ikke prediksjonene. | Foreslått | 2.9 |
 # | B-25 | I tidsfolden brukes spesifikasjonene uten `C(year)`. Nivåskiftet vises som global balanse. | Årsledd kan ikke predikere et år som ikke finnes i treningsdata. | Foreslått | 2.5, 2.9 |
-# | B-26 | Alle responser modelleres som rate med vekt (`var_weights`). For frekvens er dette identisk med antall og $\log e$-offset. | Én CV-sløyfe for alle målvariabler. Ekvivalensen er kontrollert numerisk. | Foreslått | 1.1, 2.9 |
+# | B-26 | Poisson bruker rate + eksponeringsvekt, ekvivalent med antall + offset. NB2 er et eksplisitt unntak: antallsfit med exposure, deretter rate til felles scoring. | Poisson-ekvivalensen er kontrollert numerisk; den gjelder ikke generelt NB2-variansen. | Implementert Poisson-konvensjon; NB2 presisert | 1.1, 2.9, 3 |
+# | B-27 | Prosjektet fortsetter som metodebenchmark med timingforbehold. Siste registrering per polise/år er ikke dokumenterte startverdier; ingen garanti om fravær av tidslekkasje eller prospektiv tariffytelse. | Brukeren har akseptert denne avgrensningen etter kildegjennomgangen. Bonus, status, premie og samtidige utfall er fortsatt utenfor hovedmodellens prediktorer. | Brukerbesluttet 2026-09-16 | 0, 2.10, 3 |
+# | B-28 | Bare produkt × alder og produkt × logverdi kan kvalifisere, med to ekstra kontrasthelninger hver, støtteport og B-08. Hovedleddene beholdes. | Produktets egenandel/meldemønster kan avhenge av fører og verdi; liten CC-gruppe begrenser kompleksiteten. | Brukerbesluttet adgang; teknisk avgrensning i faseplan | 2.8, 2.10, 3 |
