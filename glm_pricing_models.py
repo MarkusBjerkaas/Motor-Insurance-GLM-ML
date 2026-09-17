@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: 'defaultInterpreterPath: 3.12.14.final.0'
 #     language: python
 #     name: python3
 # ---
@@ -76,6 +76,7 @@ from patsy import PatsyError
 from sklearn.metrics import mean_tweedie_deviance
 from sklearn.model_selection import GroupKFold
 
+from src.glm_core import apply_derived_columns, check_fold_fit, prepare_fold_frames
 from src.glm_diagnostics import (
     build_data_overview,
     build_fold_summary,
@@ -90,6 +91,7 @@ from src.model_data import (
     to_model_frame,
 )
 from src.own_damage_descriptives import CURRENCY_ZERO_TOLERANCE
+from src.phase_2 import frequency_candidates
 from src.phase_2.frequency_plots import (
     plot_actual_expected,
     plot_fold_curves,
@@ -153,9 +155,6 @@ assert train_pool["property_claims"].sum() == 9_989
 assert train_pool["insured_id"].nunique() == 37_305
 assert len(frames["retained_brands"]) == 17
 display(frames["cleaning_log"])
-
-# %%
-frames
 
 # %% [markdown]
 # ### 1.1 Modellramme og responser
@@ -470,6 +469,12 @@ def prepare_design_frame(train, apply, required_columns, categorical=("year",)):
 # | `run_glm` | Spesifiserer, estimerer og presenterer én modell på hele train-poolen | én gang per modell |
 # | `cross_validate_glm` | Kjører en ferdig spesifikasjon gjennom foldene | én gang per modell |
 #
+# Fold-plumbingen `cross_validate_glm` kaller internt (avledede kolonner og
+# foldkontrollene) er flyttet til `src/glm_core.py`
+# (`prepare_fold_frames`, `apply_derived_columns`, `check_fold_fit`) siden den
+# er validering, ikke metodikk. Notebooken beholder bare de fire
+# funksjonene ovenfor.
+#
 # **Målvariablene** samles i `TARGETS`. Hver målvariabel har respons, datasett,
 # familie med log-link, vektkolonne og Tweedie-$p$ for scoren (B-07, B-26).
 # Da er en modell fullt beskrevet av målvariabel og prediktorliste.
@@ -567,12 +572,54 @@ def glm_spec(
     required_columns=None,
     derived=(),
 ):
-    """Bygg formel og innstillinger for én GLM. Kalles én gang per modell.
+    """Bygg patsy-formelen og innstillingene for én GLM.
 
-    ``required_columns`` er råkolonnene imputasjonen skal behandle. Standard er
-    prediktorene i ``x`` som finnes i ``data``; patsy-ledd som ``cr(...)`` og
-    foldvis avledede kolonner (``derived``) må få råkolonnene sine oppgitt
-    eksplisitt, slik at de aldri tolkes ut av formelteksten.
+    Kalles én gang per modell (ikke per fold). Leser dtypen til hver
+    prediktor i ``x`` og bygger formelleddet: tekst/kategori (og ``year``,
+    B-12) blir ``C(x, Treatment(basis))`` med basisnivået satt til nivået med
+    størst eksponering (B-24); numeriske kolonner går inn lineært; alt som
+    ikke er en kolonne i ``data`` (f.eks. ``cr(driver_age, df=3)``) sendes
+    uendret til patsy.
+
+    Parameters
+    ----------
+    name : str
+        Modellens ID, brukt i tabeller og feilmeldinger.
+    x : list of str
+        Prediktorene, som kolonnenavn i ``data`` eller ferdige patsy-ledd.
+    y : str
+        Responskolonnen.
+    data : pandas.DataFrame
+        Datasettet formelen bygges mot. Brukes bare til å lese dtyper og
+        basisnivåer, ikke lagret på spesifikasjonen.
+    family : statsmodels family
+        GLM-familien (med log-link) responsen skal estimeres med.
+    weight : str
+        Kolonnen med eksponering/vekt (``var_weights`` i ``fit_glm``).
+    power : float
+        Tweedie-$p$ scoren beregnes med (1 for Poisson, 2 for Gamma).
+    categorical : tuple of str, optional
+        Kolonner som alltid skal behandles som kategoriske selv om dtypen er
+        numerisk, f.eks. ``year``. Standard ``("year",)``.
+    required_columns : list of str or None, optional
+        Råkolonnene imputasjonen (B-09) skal behandle. Standard er
+        prediktorene i ``x`` som finnes i ``data``; patsy-ledd som ``cr(...)``
+        og foldvis avledede kolonner (``derived``) må få råkolonnene sine
+        oppgitt eksplisitt her, siden de ellers ikke kan tolkes ut av
+        formelteksten.
+    derived : tuple of dict, optional
+        Foldvis avledede kolonner. Hvert element har ``name``, ``learn``
+        (lærer tilstand på treningsdelen) og ``apply`` (bruker tilstanden på
+        en vilkårlig ramme). Brukes til interaksjonenes sentrering (B-28) og
+        tidsfoldens merkeliste (B-14).
+
+    Returns
+    -------
+    dict
+        Spesifikasjonen ``cross_validate_glm``, ``fit_glm`` og ``run_glm``
+        tar som ``spec``: ``name``, ``x``, ``y``, ``formula``, ``family``
+        (navn), ``glm_family`` (statsmodels-objektet), ``weight``, ``power``,
+        ``base_levels``, ``required_columns`` og ``derived``.
     """
     terms, base_levels = [], {}
     for predictor in x:
@@ -606,7 +653,29 @@ def glm_spec(
 
 
 def fit_glm(spec, data, cluster_groups=None, check_convergence=True):
-    """Estimer en ferdig spesifikasjon. ``data`` må ha fylte manglende verdier."""
+    """Estimer en ferdig spesifikasjon på ``data``.
+
+    Parameters
+    ----------
+    spec : dict
+        Spesifikasjonen fra ``glm_spec``.
+    data : pandas.DataFrame
+        Datasettet modellen estimeres på. Må ha fylte manglende verdier
+        (``prepare_design_frame``) for kolonnene i ``spec["required_columns"]``.
+    cluster_groups : pandas.Series or None, optional
+        Klyngevariabelen (typisk ``insured_id``) for cluster-robuste
+        standardfeil (B-21). ``None`` gir modellbasert kovarians, brukt i
+        hver CV-fold der bare punktestimatene trengs.
+    check_convergence : bool, optional
+        Om et ikke-konvergert fit skal kaste ``RuntimeError``. Slås av i
+        ``cross_validate_glm``, som håndterer ikke-konvergens som en
+        foldkontroll i stedet.
+
+    Returns
+    -------
+    statsmodels GLMResults
+        Den estimerte modellen.
+    """
     covariance = (
         {}
         if cluster_groups is None
@@ -628,7 +697,29 @@ def fit_glm(spec, data, cluster_groups=None, check_convergence=True):
 
 
 def run_glm(name, target, x, show=True):
-    """Spesifiser, estimer og presenter én GLM på hele train-poolen."""
+    """Spesifiser, estimer og presenter én GLM på hele train-poolen.
+
+    Parameters
+    ----------
+    name : str
+        Modellens ID, sendt videre til ``glm_spec``.
+    target : str
+        Nøkkel i ``TARGETS`` (``"frequency"``, ``"severity"`` eller
+        ``"pure_premium"``), som gir respons, datasett, familie, vekt og
+        Tweedie-$p$.
+    x : list of str
+        Prediktorene, sendt videre til ``glm_spec``.
+    show : bool, optional
+        Om sammendraget og relativitetstabellen skal vises. Standard
+        ``True``.
+
+    Returns
+    -------
+    dict
+        ``target``, ``spec``, ``result`` (statsmodels GLMResults),
+        ``summary`` (``build_glm_summary``) og ``relativities``
+        (``build_relativity_table``).
+    """
     settings = TARGETS[target]
     spec = glm_spec(name, x, **settings)
     design = prepare_design_frame(
@@ -648,69 +739,43 @@ def run_glm(name, target, x, show=True):
     return model
 
 
-def prepare_fold_frames(spec, train, frames):
-    """Imputer (B-09) og legg til foldvis avledede kolonner, lært på ``train``.
-
-    Returnerer de ferdige rammene og tilstanden de avledede kolonnene lærte
-    (f.eks. et senter eller en merkeliste), slik at den kan gjenbrukes.
-    """
-    train_design = prepare_design_frame(train, train, spec["required_columns"])
-    derived_state = {
-        item["name"]: item["learn"](train_design) for item in spec["derived"]
-    }
-    prepared = []
-    for frame in frames:
-        design = prepare_design_frame(train, frame, spec["required_columns"])
-        prepared.append(apply_derived_columns(spec, design, derived_state))
-    return prepared, derived_state
-
-
-def apply_derived_columns(spec, frame, derived_state):
-    """Legg foldvis avledede kolonner til ``frame`` med tilstand lært i trening."""
-    for item in spec["derived"]:
-        frame = item["apply"](frame, derived_state[item["name"]])
-    return frame
-
-
-def check_fold_fit(spec, result, train, val, train_prediction, val_prediction):
-    """Foldkontrollene fra plan 3.11 pkt. 6. Returnerer en liste med feil (tom = ok)."""
-    problems = []
-    exog = result.model.exog
-    rank = np.linalg.matrix_rank(exog)
-    if rank < exog.shape[1]:
-        problems.append(f"rangsvikt ({rank} av {exog.shape[1]} kolonner)")
-    if not result.converged:
-        problems.append("konvergerte ikke")
-    if len(result.model.endog) != len(train) or len(val_prediction) != len(val):
-        problems.append("radantall endret i designmatrisen")
-    for label, prediction in [
-        ("trening", train_prediction),
-        ("validering", val_prediction),
-    ]:
-        values = np.asarray(prediction, dtype=float)
-        if not (np.isfinite(values).all() and (values > 0).all()):
-            problems.append(f"ikke-endelige eller ikke-positive prediksjoner ({label})")
-    if not np.isfinite(result.params).all():
-        problems.append("ikke-endelige parametere")
-    # Kategoristøtte: hvert nivå i formelen må ha positiv respons i treningsdelen
-    weighted_response = train[spec["y"]] * train[spec["weight"]]
-    for column in spec["base_levels"]:
-        response_by_level = weighted_response.groupby(train[column]).sum()
-        empty_levels = response_by_level.index[response_by_level.le(0)].tolist()
-        if empty_levels:
-            problems.append(
-                f"{column} har nivåer uten respons i trening: {empty_levels}"
-            )
-    return problems, rank
-
-
 def cross_validate_glm(spec, data, folds, fold_hook=None):
     """Estimer og scor én ferdig spesifikasjon out-of-fold.
 
-    Returnerer ``oof``, ``scores``, ``params``, ``param_se``, ``support``,
-    ``valid`` og ``error``. ``fold_hook(spec, fold_name, result, train_design,
-    val_design, derived_state)`` kan returnere en dict med DataFrames (f.eks.
-    kurver); de samles per nøkkel på tvers av foldene.
+    I hver fold: manglende-reglene læres på treningsdelen og brukes på begge
+    deler (``prepare_fold_frames``, B-09/B-28); modellen estimeres på
+    treningsdelen; trenings- og valideringsdelen predikeres og scores med
+    vektet Tweedie-deviance; nullmodellen (vektet snitt i treningsdelen)
+    scores på valideringsdelen og gir $D^2$; foldkontrollene
+    (``check_fold_fit``, plan 3.11 pkt. 6) avgjør om OOF-prediksjonen tas med.
+
+    Parameters
+    ----------
+    spec : dict
+        Spesifikasjonen fra ``glm_spec``.
+    data : pandas.DataFrame
+        Hele train-poolen (2022–2023) spesifikasjonens datasett er hentet
+        fra. Foldene indekserer inn i denne.
+    folds : list of dict
+        Foldene fra ``build_model_frames``/tidsfolden, hver med ``fold``
+        (navn), ``train_index`` og ``val_index``.
+    fold_hook : callable or None, optional
+        ``fold_hook(spec, fold_name, result, train_design, val_design,
+        derived_state)``, kalt for hver gyldig fold. Kan returnere en dict
+        med DataFrames (f.eks. relative kurver); de samles per nøkkel på
+        tvers av foldene og legges til i returverdien. ``None`` betyr ingen
+        ekstra uttrekk.
+
+    Returns
+    -------
+    dict
+        ``oof`` (pandas.Series med OOF-prediksjoner, NaN for folder som ikke
+        passerte kontrollene), ``scores`` (DataFrame, én rad per fold),
+        ``params`` og ``param_se`` (DataFrame, én kolonne per fold, brukt til
+        stabilitetssjekk), ``support`` (kategoristøtte per fold og nivå),
+        ``valid`` (bool, ``True`` bare når alle folder passerte kontrollene)
+        og ``error`` (feilbeskrivelse eller ``None``), samt eventuelle
+        nøkler fra ``fold_hook``.
     """
     response, weight = spec["y"], spec["weight"]
     oof_predictions = pd.Series(np.nan, index=data.index, name=spec["name"])
@@ -727,7 +792,7 @@ def cross_validate_glm(spec, data, folds, fold_hook=None):
         val = data.loc[data.index.intersection(fold["val_index"])]
         try:
             (train_design, val_design), derived_state = prepare_fold_frames(
-                spec, train, [train, val]
+                spec, train, [train, val], prepare_design_frame
             )
             result = fit_glm(spec, train_design, check_convergence=False)
             train_prediction = result.predict(train_design)
@@ -1219,54 +1284,52 @@ display(
 # - **Utelukket:** bonus (as-of-port ikke bestått, B-13), status, premier,
 #   samtidige skade-/kostnadsfelt, kjøretøyalder og rå førerkortalder.
 
-# %%
-PLAUSIBLE = "plausibel, uverifisert startverdi"
-# fmt: off
-information_timing = pd.DataFrame(
-    [
-        ("year", "ja", "Frekvens 0,235 (2022) mot 0,285 (2023); se tidsfolden i 2.9.", "dokumentert", "obligatorisk kontroll (utelates i tidsfolden)"),
-        ("policy_type", "trolig", "COMP_E 0,183, COMP_N 0,692; CC er utenfor populasjonen (B-29).", PLAUSIBLE, "obligatorisk kontroll"),
-        ("driver_age", "trolig", "Seks kvantilbøtter 0,268–0,314, ikke monoton; spenn 18–85, p1/p99 27/73.", PLAUSIBLE, "kjerneblokk (lineær/df3/df4)"),
-        ("log_vehicle_value", "trolig", "0,220 i laveste til 0,350 i høyeste bøtte, ikke helt monoton; 33 manglende.", PLAUSIBLE, "kjerneblokk (lineær/df3/df4)"),
-        ("performance_hp_per_tonne", "trolig", "0,238 til 0,331; korrelasjon 0,563 med logverdi; p99 150,4, maks 318,5.", PLAUSIBLE, "kjerneblokk (lineær/df3/df4)"),
-        ("fuel_type", "trolig", "Diesel 0,283 mot bensin 0,228; 438 manglende (MISSING).", PLAUSIBLE, "kjerneblokk"),
-        ("circulation_area", "trolig", "Urban 0,301 mot rural 0,220.", PLAUSIBLE, "kjerneblokk"),
-        ("municipality_type", "trolig", "Innland/kyst/øyer 0,282/0,244/0,222; Cramér's V 0,108 mot bruksmiljø.", PLAUSIBLE, "kjerneblokk"),
-        ("payment_frequency", "trolig", "Årlig/halvårlig/kvartal 0,262/0,271/0,376; kvartal 1 817 eksponeringsår.", PLAUSIBLE, "kjerneblokk"),
-        ("business_type", "trolig", "NB 0,241 mot P 0,342.", PLAUSIBLE, "kjerneblokk"),
-        ("vehicle_brand_pooled", "trolig", "17 merker ≥500 eksponeringsår dekker 88,5 %; merkefrekvens 0,185–0,347.", PLAUSIBLE, "sekundær blokk (B-14)"),
-        ("seats_group", "trolig", "83 % har 5 seter, 9,9 % har 7; 9 seter bare 94 eksponeringsår. Svak rå separasjon.", PLAUSIBLE, "sekundær blokk"),
-        ("driving_experience_years", "trolig", "Korrelasjon 0,879 med alder; førerkortalder endres i 14,44 % av årsovergangene.", PLAUSIBLE, "bare sensitivitet (B-11)"),
-        ("bonus_score", "uavklart", "G/N/B 0,262/0,398/0,523, men ingen as-of-dato; N/B bare 745/608 eksponeringsår.", "utelukket", "utelukket (B-13); ev. merket sensitivitet"),
-        ("vehicle_age", "uavklart", "Uklar semantikk i kilden.", "utelukket", "utelukket"),
-        ("age_driving_licence", "trolig", "Rå felt med endringer mellom år; inngår bare via erfaring.", "utelukket", "utelukket som eget ledd"),
-        ("policy_status", "nei", "Kansellering kan følge av skaden selv.", "utelukket", "utelukket (B-02); sensitivitet uten kansellerte"),
-        ("insured_id", "ja", "Identifikator, ingen risikoinformasjon.", "utelukket", "gruppering i CV og cluster-SE"),
-        ("total_exposure", "nei", "Realiseres i perioden.", "utelukket", "respons/vekt/offset (B-26)"),
-        ("skade- og kostnadsfelt", "nei", "Samtidige utfall i samme periode.", "utelukket", "respons, aldri prediktor"),
-        ("premier", "nei", "Dagens tariff; ville lekke eksisterende prisstruktur.", "utelukket", "benchmark i fase 4 (B-20)"),
-    ],
-    columns=["variable", "available_at_pricing", "evidence", "timing_status", "allowed_use"],
-)
-# fmt: on
-display(information_timing)
+# %% [markdown]
+# | variable | available_at_pricing | evidence | timing_status | allowed_use |
+# |---|---|---|---|---|
+# | `year` | ja | Frekvens 0,235 (2022) mot 0,285 (2023); se tidsfolden i 2.9. | dokumentert | obligatorisk kontroll (utelates i tidsfolden) |
+# | `policy_type` | trolig | COMP_E 0,183, COMP_N 0,692; CC er utenfor populasjonen (B-29). | plausibel, uverifisert startverdi | obligatorisk kontroll |
+# | `driver_age` | trolig | Seks kvantilbøtter 0,268–0,314, ikke monoton; spenn 18–85, p1/p99 27/73. | plausibel, uverifisert startverdi | kjerneblokk (lineær/df3/df4) |
+# | `log_vehicle_value` | trolig | 0,220 i laveste til 0,350 i høyeste bøtte, ikke helt monoton; 33 manglende. | plausibel, uverifisert startverdi | kjerneblokk (lineær/df3/df4) |
+# | `performance_hp_per_tonne` | trolig | 0,238 til 0,331; korrelasjon 0,563 med logverdi; p99 150,4, maks 318,5. | plausibel, uverifisert startverdi | kjerneblokk (lineær/df3/df4) |
+# | `fuel_type` | trolig | Diesel 0,283 mot bensin 0,228; 438 manglende (MISSING). | plausibel, uverifisert startverdi | kjerneblokk |
+# | `circulation_area` | trolig | Urban 0,301 mot rural 0,220. | plausibel, uverifisert startverdi | kjerneblokk |
+# | `municipality_type` | trolig | Innland/kyst/øyer 0,282/0,244/0,222; Cramér's V 0,108 mot bruksmiljø. | plausibel, uverifisert startverdi | kjerneblokk |
+# | `payment_frequency` | trolig | Årlig/halvårlig/kvartal 0,262/0,271/0,376; kvartal 1 817 eksponeringsår. | plausibel, uverifisert startverdi | kjerneblokk |
+# | `business_type` | trolig | NB 0,241 mot P 0,342. | plausibel, uverifisert startverdi | kjerneblokk |
+# | `vehicle_brand_pooled` | trolig | 17 merker ≥500 eksponeringsår dekker 88,5 %; merkefrekvens 0,185–0,347. | plausibel, uverifisert startverdi | sekundær blokk (B-14) |
+# | `seats_group` | trolig | 83 % har 5 seter, 9,9 % har 7; 9 seter bare 94 eksponeringsår. Svak rå separasjon. | plausibel, uverifisert startverdi | sekundær blokk |
+# | `driving_experience_years` | trolig | Korrelasjon 0,879 med alder; førerkortalder endres i 14,44 % av årsovergangene. | plausibel, uverifisert startverdi | bare sensitivitet (B-11) |
+# | `bonus_score` | uavklart | G/N/B 0,262/0,398/0,523, men ingen as-of-dato; N/B bare 745/608 eksponeringsår. | utelukket | utelukket (B-13); ev. merket sensitivitet |
+# | `vehicle_age` | uavklart | Uklar semantikk i kilden. | utelukket | utelukket |
+# | `age_driving_licence` | trolig | Rå felt med endringer mellom år; inngår bare via erfaring. | utelukket | utelukket som eget ledd |
+# | `policy_status` | nei | Kansellering kan følge av skaden selv. | utelukket | utelukket (B-02); sensitivitet uten kansellerte |
+# | `insured_id` | ja | Identifikator, ingen risikoinformasjon. | utelukket | gruppering i CV og cluster-SE |
+# | `total_exposure` | nei | Realiseres i perioden. | utelukket | respons/vekt/offset (B-26) |
+# | `skade- og kostnadsfelt` | nei | Samtidige utfall i samme periode. | utelukket | respons, aldri prediktor |
+# | `premier` | nei | Dagens tariff; ville lekke eksisterende prisstruktur. | utelukket | benchmark i fase 4 (B-20) |
 
 # %% [markdown]
 # ### 3.1 Verktøy for fase 1
 #
 # Denne seksjonen bygger verktøyene resten av fase 1 bruker. Ingen kandidat
-# estimeres her; bare asserts kjøres. Utvidelsene av `prepare_design_frame`,
-# `glm_spec` og `cross_validate_glm` står i 2.6–2.7.
+# estimeres her. Utvidelsene av `prepare_design_frame`, `glm_spec` og
+# `cross_validate_glm` står i 2.6–2.7. Blokkregisteret, kandidatbyggeren,
+# kurvene og seleksjonsreglene (B-08, planens 3.4) er flyttet til
+# `src/phase_2/frequency_candidates.py`, siden de er verktøy og validering,
+# ikke selve metodikken. Notebooken beholder bare `cross_validate_candidate`,
+# `pooled_oof_deviance`, `sign_stability` og `spline_stability`, som er
+# tettest knyttet til CV-sløyfen og stabilitetsdefinisjonen.
 #
-# | Byggestein | Innhold |
+# | Byggestein | Hvor |
 # |---|---|
-# | `seats_group`, rå `vehicle_brand` | Deterministisk setegruppe og rå merke til tidsfoldens merkeliste |
-# | `FEATURE_BLOCKS`, `CONTINUOUS_FORMS` | Blokkregister: råkolonner og ledd per form |
-# | `build_frequency_candidate` | Kandidat-dict etter datakontrakten, via `glm_spec` |
-# | `frequency_curve_hook`, `fit_full_curves` | Relative kurver med deltametode-SE og haleprediksjoner per fold og på hele train-poolen |
-# | `cross_validate_candidate` | CV med enkel minnecache |
-# | `assess_stability` | Stabilitet per blokk etter støyskalerte grenser |
-# | `compare_models`, `select_from_candidate_set` | Parvis sammenligning (B-08) og valg i fast kandidatsett |
+# | `seats_group`, rå `vehicle_brand` | Notebooken (under) |
+# | `FEATURE_BLOCKS`, `CONTINUOUS_FORMS`, `build_frequency_candidate` | `frequency_candidates.py` |
+# | `frequency_curve_hook`, `fit_full_curves` | `frequency_candidates.py` |
+# | `cross_validate_candidate`, `pooled_oof_deviance` | Notebooken (under) |
+# | `sign_stability`, `spline_stability` | Notebooken (under) |
+# | `assess_stability`, `compare_models`, `select_from_candidate_set` | `frequency_candidates.py` |
+# | Kontroller fra faseplanens 3.12 | `frequency_candidates.run_phase1_framework_checks` |
 #
 # **Kurvegrid.** 25 jevne punkter mellom eksponeringsvektet p2,5 og p97,5 i
 # train-poolen etter medianimputasjon. Referansen er eksponeringsvektet median.
@@ -1319,278 +1382,20 @@ assert (
     model_frame.groupby("seats_group")["total_exposure"].sum().idxmax() == "5"
 )  # basis etter B-24
 
-CONTINUOUS_FORMS = {
-    "linear": "{x}",
-    "df3": "cr({x}, df=3, constraints='center')",
-    "df4": "cr({x}, df=4, constraints='center')",
-}
-FORM_DF = {"linear": 1, "df3": 3, "df4": 4}
-FORM_LABELS = {"linear": "lin", "df3": "df3", "df4": "df4"}
-
-# Blokkregister: blokknavn → rolle, råkolonne og (for kontinuerlige) kortnavn i ID
-FEATURE_BLOCKS = {
-    "product": {"role": "kontroll", "column": "policy_type"},
-    "year": {"role": "kontroll", "column": "year"},
-    "driver": {"role": "kjerne", "column": "driver_age", "label": "age"},
-    "value": {"role": "kjerne", "column": "log_vehicle_value", "label": "value"},
-    "performance": {
-        "role": "kjerne",
-        "column": "performance_hp_per_tonne",
-        "label": "perf",
-    },
-    "fuel": {"role": "kjerne", "column": "fuel_type"},
-    "circulation": {"role": "kjerne", "column": "circulation_area"},
-    "municipality": {"role": "kjerne", "column": "municipality_type"},
-    "payment": {"role": "kjerne", "column": "payment_frequency"},
-    "business": {"role": "kjerne", "column": "business_type"},
-    "brand": {"role": "sekundær", "column": "vehicle_brand_pooled"},
-    "seats": {"role": "sekundær", "column": "seats_group"},
-    "experience": {
-        "role": "sensitivitet",
-        "column": "driving_experience_years",
-        "label": "exp",
-    },
-}
-CONTROL_BLOCKS = ["product", "year"]
-CORE_BLOCKS = [
-    name for name, block in FEATURE_BLOCKS.items() if block["role"] == "kjerne"
-]
-# Tie-break-rekkefølge for form (planens 3.4)
-CONTINUOUS_FEATURES = ["driver_age", "log_vehicle_value", "performance_hp_per_tonne"]
-MIN_STABILITY_EXPOSURE = 500
-STABLE_SIGN_FOLDS = 4
-SCORE_TOLERANCE = 1e-10
-
-
-def form_model_id(stage, forms):
-    """Stabil ID for formkandidater, f.eks. ``F2_age-df3_value-lin_perf-df4``."""
-    labels = {block["column"]: block.get("label") for block in FEATURE_BLOCKS.values()}
-    return (
-        stage
-        + "_"
-        + "_".join(
-            f"{labels[column]}-{FORM_LABELS[form]}" for column, form in forms.items()
-        )
-    )
-
-
-def build_frequency_candidate(
-    model_id,
-    stage,
-    blocks,
-    forms=None,
-    parent_id=None,
-    eligible_for_selection=True,
-    derived=(),
-    family="poisson",
-    data=model_frame,
-):
-    """Bygg én frekvenskandidat etter datakontrakten, via ``glm_spec``.
-
-    ``forms`` angir form per kontinuerlig råkolonne (standard lineær).
-    ``derived`` er foldvis lærte kolonner med ``name``, ``terms``, ``learn`` og
-    ``apply``. NB2 får egen antallsgren i 3.8 og er ikke implementert her.
-    """
-    if family != "poisson":
-        raise NotImplementedError("NB2 implementeres som egen antallsgren i 3.8")
-    if {"driver", "experience"} <= set(blocks):
-        raise ValueError("B-11: alder og erfaring brukes aldri samtidig")
-    forms = dict(forms or {})
-    x, required, used_forms = [], [], {}
-    for name in blocks:
-        column = FEATURE_BLOCKS[name]["column"]
-        required.append(column)
-        if "label" in FEATURE_BLOCKS[name]:  # kontinuerlig blokk
-            used_forms[column] = forms.pop(column, "linear")
-            x.append(CONTINUOUS_FORMS[used_forms[column]].format(x=column))
-        else:
-            x.append(column)
-    assert not forms, f"former for blokker som ikke er med: {forms}"
-    x += [term for item in derived for term in item["terms"]]
-    spec = glm_spec(
-        model_id,
-        x,
-        **{**TARGETS["frequency"], "data": data},
-        required_columns=required,
-        derived=derived,
-    )
-    # Parametertall = kolonner i designmatrisen på hele train-poolen, inkl. intercept
-    design = prepare_design_frame(data, data, required)
-    derived_state = {item["name"]: item["learn"](design) for item in derived}
-    design = apply_derived_columns(spec, design, derived_state)
-    n_parameters = patsy.dmatrix(spec["formula"].split("~")[1], design).shape[1]
-    return spec | {
-        "model_id": model_id,
-        "stage": stage,
-        "parent_id": parent_id,
-        "feature_blocks": list(blocks),
-        "forms": used_forms,
-        "n_parameters": n_parameters,
-        "eligible_for_selection": eligible_for_selection and "experience" not in blocks,
-    }
-
-
-def build_curve_grid(frame, feature, n_points=25):
-    """Visningsgrid: jevne punkter mellom eksponeringsvektet p2,5 og p97,5."""
-    values = frame[feature].fillna(frame[feature].median()).to_numpy()
-    order = np.argsort(values, kind="stable")
-    cumulative = np.cumsum(frame["total_exposure"].to_numpy()[order])
-    cumulative /= cumulative[-1]
-
-    # Minste x der kumulativ sortert eksponering når andelen q
-    def quantile(q):
-        return values[order][np.searchsorted(cumulative, q)]
-
-    return {
-        "x": np.linspace(quantile(0.025), quantile(0.975), n_points),
-        "reference": quantile(0.5),
-    }
-
-
-CURVE_GRIDS = {
-    feature: build_curve_grid(model_frame, feature)
-    for feature in CONTINUOUS_FEATURES + ["driving_experience_years"]
-}
-
-
-def frequency_curve_hook(
-    spec, fold_name, result, train_design, val_design, derived_state
-):
-    """Relative kurver og haleprediksjoner for kontinuerlige ledd i én fold.
-
-    Kurven er exp(f(x) − f(ref)) fra foldens egen ``design_info``. SE på
-    logskala er deltametoden sqrt(d' Σ d), der Σ er modellbasert kovarians
-    skalert med Pearson-φ̂ fra treningsfolden.
-    """
-    design_info = (
-        getattr(result.model, "model_spec", None) or result.model.data.model_spec
-    )
-    pearson_phi = result.pearson_chi2 / result.df_resid
-    covariance = (result.cov_params() * pearson_phi / result.scale).to_numpy()
-    params = result.params
-    curve_rows, tail_rows = [], []
-    for feature in spec["forms"]:
-        grid = CURVE_GRIDS[feature]
-        train_min, train_max = train_design[feature].min(), train_design[feature].max()
-        # Rekkefølge: 25 gridpunkter, referanse, treningsmin, treningsmaks
-        points = np.concatenate([grid["x"], [grid["reference"], train_min, train_max]])
-        for product in spec.get("curve_products", ["ALLE"]):
-            frame = train_design.iloc[[0] * len(points)].reset_index(drop=True)
-            frame[feature] = points
-            if product != "ALLE":
-                frame["policy_type"] = product
-            frame = apply_derived_columns(spec, frame, derived_state)
-            design = patsy.build_design_matrices(
-                [design_info], frame, return_type="dataframe"
-            )[0]
-            difference = (
-                design[params.index].to_numpy()
-                - design[params.index].to_numpy()[len(grid["x"])]
-            )
-            log_relative = difference @ params.to_numpy()
-            se_log = np.sqrt(
-                np.einsum("ij,jk,ik->i", difference, covariance, difference)
-            )
-            n_curve = len(grid["x"]) + 1  # gridet og referansepunktet
-            curve_rows.append(
-                pd.DataFrame(
-                    {
-                        "model_id": spec["model_id"],
-                        "fold": fold_name,
-                        "feature": feature,
-                        "product": product,
-                        "x": points[:n_curve],
-                        "relative": np.exp(log_relative[:n_curve]),
-                        "se_log": se_log[:n_curve],
-                    }
-                ).sort_values("x")
-            )
-            tail_rows.append(
-                {
-                    "model_id": spec["model_id"],
-                    "fold": fold_name,
-                    "feature": feature,
-                    "product": product,
-                    "train_min": train_min,
-                    "train_max": train_max,
-                    "relative_at_min": np.exp(log_relative[-2]),
-                    "relative_at_max": np.exp(log_relative[-1]),
-                    "n_val_outside": int(
-                        (~val_design[feature].between(train_min, train_max)).sum()
-                    ),
-                }
-            )
-    if not curve_rows:
-        return {}
-    return {
-        "curves": pd.concat(curve_rows, ignore_index=True),
-        "tails": pd.DataFrame(tail_rows),
-    }
-
-
-def fit_full_curves(candidate, data=model_frame):
-    """Kurver og haler fra fit på hele train-poolen (``fold="full"``), til visning."""
-    (design,), derived_state = prepare_fold_frames(candidate, data, [data])
-    result = fit_glm(candidate, design)
-    return frequency_curve_hook(
-        candidate, "full", result, design, design, derived_state
-    )
-
-
-def data_fingerprint(obj):
-    """Kort hash av innholdet i en DataFrame/Series/Index (til cache-nøkkelen)."""
-    return hashlib.sha1(
-        pd.util.hash_pandas_object(obj).to_numpy().tobytes()
-    ).hexdigest()
-
-
-CV_CACHE = {}  # bare i minnet: nullstilles ved hver kjøring av notebooken
-
-
-def cross_validate_candidate(candidate, folds=None, data=model_frame):
-    """CV for én kandidat, gjenbrukt fra ``CV_CACHE`` når innholdet er identisk.
-
-    Nøkkelen skiller formel, familie, råkolonner, avledede kolonner, respons,
-    vekt, dataene og foldene. Identiske kandidater med ulik ID deler fit, men får
-    egen ``model_id`` i resultatet.
-    """
-    folds = cv_folds if folds is None else folds
-    columns = list(
-        dict.fromkeys(
-            candidate["required_columns"] + [candidate["y"], candidate["weight"]]
-        )
-    )
-    key = (
-        candidate["formula"],
-        candidate["family"],
-        tuple(candidate["required_columns"]),
-        tuple(item["name"] for item in candidate["derived"]),
-        tuple(candidate.get("curve_products", ["ALLE"])),
-        data_fingerprint(data[columns]),
-        tuple(
-            (
-                fold["fold"],
-                data_fingerprint(fold["train_index"]),
-                data_fingerprint(fold["val_index"]),
-            )
-            for fold in folds
-        ),
-    )
-    if key not in CV_CACHE:
-        CV_CACHE[key] = cross_validate_glm(
-            candidate, data, folds, fold_hook=frequency_curve_hook
-        )
-    cached, model_id = CV_CACHE[key], candidate["model_id"]
-    relabeled = {**cached, "spec": candidate, "oof": cached["oof"].rename(model_id)}
-    relabeled["scores"] = cached["scores"].assign(model=model_id)
-    for part in ("curves", "tails"):
-        if part in cached:
-            relabeled[part] = cached[part].assign(model_id=model_id)
-    return relabeled
-
 
 def pooled_oof_deviance(cv_result):
-    """Pooled OOF-deviance beregnet direkte fra de samlede OOF-prediksjonene."""
+    """Pooled OOF-deviance beregnet direkte fra de samlede OOF-prediksjonene.
+
+    Parameters
+    ----------
+    cv_result : dict
+        Resultatet fra ``cross_validate_candidate``, med ``spec`` og ``oof``.
+
+    Returns
+    -------
+    float
+        Vektet Tweedie-deviance over radene som har en OOF-prediksjon.
+    """
     spec, data = cv_result["spec"], TARGETS["frequency"]["data"]
     rows = cv_result["oof"].dropna().index
     return mean_tweedie_deviance(
@@ -1602,7 +1407,24 @@ def pooled_oof_deviance(cv_result):
 
 
 def sign_stability(estimates, standard_errors):
-    """Fortegnsstabilitet for én effekt over foldene, med støyskalert reversering."""
+    """Fortegnsstabilitet for én effekt over foldene, med støyskalert reversering.
+
+    Parameters
+    ----------
+    estimates : array-like
+        Koeffisientestimatet for effekten, én verdi per fold.
+    standard_errors : array-like
+        Standardfeilen til samme koeffisient, én verdi per fold (modellbasert
+        kovarians skalert med Pearson-φ̂ fra treningsfolden).
+
+    Returns
+    -------
+    str
+        ``"stabil"`` hvis samme fortegn i minst ``STABLE_SIGN_FOLDS`` av
+        foldene. Ellers ``"UAVKLART – materiell reversering"`` hvis minst én
+        fold med motsatt fortegn er materiell ($|estimat| > 2\\cdot SE$),
+        annars ``"nær-null"``.
+    """
     reference_sign = np.sign(np.median(estimates))
     if (np.sign(estimates) == reference_sign).sum() >= STABLE_SIGN_FOLDS:
         return "stabil"
@@ -1613,7 +1435,26 @@ def sign_stability(estimates, standard_errors):
 
 
 def spline_stability(cv_result, feature):
-    """Kurvestabilitet: materielt motsatte folder per gridpunkt, foldspenn og haler."""
+    """Kurvestabilitet: materielt motsatte folder per gridpunkt, foldspenn og haler.
+
+    Parameters
+    ----------
+    cv_result : dict
+        Resultatet fra ``cross_validate_candidate``, med ``curves`` og
+        ``tails`` fra ``frequency_curve_hook``.
+    feature : str
+        Den kontinuerlige råkolonnen kurven gjelder for.
+
+    Returns
+    -------
+    status : str
+        ``"stabil"`` eller ``"UAVKLART – mulig reversering"`` (mer enn én
+        materielt motsatt fold per gridpunkt/produkt, målt mot
+        foldmedianen).
+    detail : str
+        Maks foldspenn, relativ prediksjon ved treningsfoldens min/maks og
+        antall valideringsrader utenfor treningsområdet.
+    """
     curves = cv_result["curves"].query("feature == @feature")
     log_relative = np.log(curves["relative"])
     points = [curves["product"], curves["x"]]
@@ -1643,370 +1484,125 @@ def spline_stability(cv_result, feature):
     return status, detail
 
 
-def assess_stability(cv_result, blocks=None):
-    """Stabilitet per blokk (planens 3.4 med støyskalerte grenser).
+def cross_validate_candidate(candidate, folds=None, data=model_frame):
+    """CV for én kandidat, gjenbrukt fra minne- eller disk-cache når mulig.
 
-    Returnerer samlet status (verste blokk) og en tabell med én rad per vurdert
-    effekt. Nivåer under 500 eksponeringsår i train-poolen og MISSING vurderes ikke.
+    To cache-lag: ``CV_CACHE`` (minne, per kjerneøkt) og ``.cv_cache/`` på
+    disk (``frequency_candidates.cache_load``/``cache_store``, overlever en
+    kjerneomstart). Nøkkelen inkluderer ``CODE_FINGERPRINT``
+    (kildekoden til CV-logikken, satt av ``configure()``), slik at en
+    redigering av selve fit/CV-koden usynliggjør gamle disk-treff i stedet
+    for å returnere et resultat fra før endringen.
+
+    Parameters
+    ----------
+    candidate : dict
+        Kandidatspesifikasjonen fra ``build_frequency_candidate``.
+    folds : list of dict or None, optional
+        Foldene fra ``build_model_frames``. Standard er ``cv_folds``.
+    data : pandas.DataFrame, optional
+        Datasettet kandidaten fittes på. Standard ``model_frame``.
+
+    Returns
+    -------
+    dict
+        Resultatet fra ``cross_validate_glm`` (med ``frequency_curve_hook``
+        som ``fold_hook``), relabelt til kandidatens ``model_id``. Nøkkelen
+        skiller formel, familie, råkolonner, avledede kolonner, respons,
+        vekt, dataene, foldene og CV-koden, så identiske kandidater med ulik
+        ID deler fit, men får egen ``model_id`` i resultatet.
     """
-    spec, params, standard_errors = (
-        cv_result["spec"],
-        cv_result["params"],
-        cv_result["param_se"],
+    folds = cv_folds if folds is None else folds
+    columns = list(
+        dict.fromkeys(
+            candidate["required_columns"] + [candidate["y"], candidate["weight"]]
+        )
     )
-    rows = []
-    # B-28-interaksjoner er foldvis avledede kolonner med ``slope_feature`` (3.7)
-    interactions = {
-        item["name"]: item for item in spec["derived"] if "slope_feature" in item
-    }
-    for name in (
-        spec["feature_blocks"] + list(interactions) if blocks is None else blocks
-    ):
-        if name in interactions:
-            item = interactions[name]
-            for parameter in item["terms"]:
-                estimates = params.loc[parameter]
-                rows.append(
-                    {
-                        "block": name,
-                        "effect": parameter,
-                        "status": sign_stability(
-                            estimates, standard_errors.loc[parameter]
-                        ),
-                        "detail": f"positive folder {int(estimates.gt(0).sum())}/{len(estimates)}",
-                    }
-                )
-            status, detail = spline_stability(cv_result, item["slope_feature"])
-            rows.append(
-                {
-                    "block": name,
-                    "effect": f"{item['slope_feature']} per produkt",
-                    "status": status,
-                    "detail": detail,
-                }
+    key = (
+        candidate["formula"],
+        candidate["family"],
+        tuple(candidate["required_columns"]),
+        tuple(item["name"] for item in candidate["derived"]),
+        tuple(candidate.get("curve_products", ["ALLE"])),
+        frequency_candidates.data_fingerprint(data[columns]),
+        tuple(
+            (
+                fold["fold"],
+                frequency_candidates.data_fingerprint(fold["train_index"]),
+                frequency_candidates.data_fingerprint(fold["val_index"]),
             )
-            continue
-        column = FEATURE_BLOCKS[name]["column"]
-        form = spec["forms"].get(column)
-        if form in ("df3", "df4"):
-            status, detail = spline_stability(cv_result, column)
-            rows.append(
-                {"block": name, "effect": column, "status": status, "detail": detail}
-            )
-            continue
-        if form == "linear":
-            effects = {column: column}  # parameter → kort effektnavn
-        else:
-            exposure = (
-                model_frame.groupby(column)["total_exposure"].sum().rename(index=str)
-            )
-            prefix = f"C({column}, "
-            levels = {
-                parameter: parameter.split("[T.", 1)[1][:-1]
-                for parameter in params.index
-                if parameter.startswith(prefix)
-            }
-            effects = {
-                parameter: f"{column}={level}"
-                for parameter, level in levels.items()
-                if exposure.get(level, 0) >= MIN_STABILITY_EXPOSURE
-            }
-        for parameter, effect in effects.items():
-            estimates = params.loc[parameter]
-            status = sign_stability(estimates, standard_errors.loc[parameter])
-            detail = f"positive folder {int(estimates.gt(0).sum())}/{len(estimates)}"
-            rows.append(
-                {"block": name, "effect": effect, "status": status, "detail": detail}
-            )
-    table = pd.DataFrame(rows, columns=["block", "effect", "status", "detail"])
-    for status in ("UAVKLART", "nær-null", "stabil"):
-        worst = table.loc[table["status"].str.startswith(status), "status"]
-        if len(worst):
-            return worst.iloc[0], table
-    return "ikke vurdert", table
-
-
-def stability_passes(status):
-    """``nær-null`` flagges, men stopper ikke stigen; UAVKLART og ugyldig gjør det."""
-    return status in ("stabil", "nær-null", "ikke vurdert")
-
-
-def ae_outside_noise(actual, expected, phi):
-    """A/E-flagg: |A/E − 1| > 2·SE med SE ≈ sqrt(φ̂ / forventet antall).
-
-    Ignorerer korrelasjon innen ``insured_id``, så SE er noe optimistisk.
-    """
-    return (actual / expected - 1).abs() > 2 * np.sqrt(phi / expected)
-
-
-def differing_blocks(baseline_spec, candidate_spec):
-    """Blokker (og B-28-interaksjoner) kandidaten har som mangler eller har annen form i baseline."""
-    baseline_derived = {item["name"] for item in baseline_spec["derived"]}
-    return [
-        name
-        for name in candidate_spec["feature_blocks"]
-        if name not in baseline_spec["feature_blocks"]
-        or candidate_spec["forms"].get(FEATURE_BLOCKS[name]["column"])
-        != baseline_spec["forms"].get(FEATURE_BLOCKS[name]["column"])
-    ] + [
-        item["name"]
-        for item in candidate_spec["derived"]
-        if "slope_feature" in item and item["name"] not in baseline_derived
-    ]
-
-
-def compare_models(cv_results, baseline_id, candidate_id, direction="oppgradering"):
-    """Én sammenligningsrad etter datakontrakten (B-08 / forenkling innen 1 SE).
-
-    ``gain_k = D_baseline,k − D_candidate,k``. Ved forenkling er baseline den rikere
-    modellen, og ``passes_1se`` betyr snittap ≤ SE av tapet.
-    """
-    baseline, candidate = cv_results[baseline_id], cv_results[candidate_id]
-    row = {"baseline": baseline_id, "candidate": candidate_id, "direction": direction}
-    if not (baseline["valid"] and candidate["valid"]):
-        errors = "; ".join(r["error"] for r in (baseline, candidate) if r["error"])
-        return row | {
-            "pooled_gain": np.nan,
-            "mean_gain": np.nan,
-            "se_gain": np.nan,
-            "folds_improved": 0,
-            "passes_1se": False,
-            "passes_b08": False if direction == "oppgradering" else None,
-            "near_miss_3of5": False,
-            "stability": "ugyldig",
-            "note": f"ugyldig kandidat: {errors}",
-        }
-    # Parvise sammenligninger krever identiske rader og vekter i hver fold
-    columns = ["fold", "n_val", "val_weight"]
-    assert baseline["scores"][columns].equals(candidate["scores"][columns])
-    paired = paired_improvement(
-        pd.concat([baseline["scores"], candidate["scores"]]), baseline_id, candidate_id
+            for fold in folds
+        ),
+        frequency_candidates.CODE_FINGERPRINT,
     )
-    # Stabilitet avgjøres på blokkene som er nye eller har endret form i kandidaten
-    changed = differing_blocks(baseline["spec"], candidate["spec"])
-    stability = assess_stability(candidate, changed)[0] if changed else "ikke vurdert"
-    stable = stability_passes(stability)
-    mean_gain, se_gain = paired["snitt_forbedring"], paired["standardfeil"]
-    notes = [] if stable or stability == "ikke vurdert" else [stability]
-    # Nær-null-effekter i hele kandidaten vises alltid, selv om de ikke stopper valget
-    stability_table = assess_stability(candidate)[1]
-    near_zero = stability_table.loc[stability_table["status"].eq("nær-null"), "effect"]
-    if len(near_zero):
-        notes.append("nær-null: " + ", ".join(near_zero))
-    if direction == "oppgradering":
-        passes_1se = bool(mean_gain > se_gain)
-        passes_b08 = bool(paired["passerer_b08"] and stable)
-        near_miss = bool(
-            paired["pooled_forbedring"] > 0
-            and passes_1se
-            and stable
-            and paired["folder_med_forbedring"] == 3
-        )
-    else:
-        passes_1se = bool(-mean_gain <= se_gain)  # snittap ≤ SE av tapet
-        passes_b08, near_miss = None, False
-    if near_miss:  # printes med report_near_misses der tabellen vises
-        notes.append("NÆR-TREFF: bedre i bare 3/5 folder")
-    return row | {
-        "pooled_gain": paired["pooled_forbedring"],
-        "mean_gain": mean_gain,
-        "se_gain": se_gain,
-        "folds_improved": paired["folder_med_forbedring"],
-        "passes_1se": passes_1se,
-        "passes_b08": passes_b08,
-        "near_miss_3of5": near_miss,
-        "stability": stability,
-        "note": "; ".join(notes) or None,
-    }
-
-
-def select_from_candidate_set(cv_results, candidate_ids, anchor_id):
-    """Valg i fast kandidatsett (planens 3.4), med anker-kravet etter B-08."""
-    rows = []
-    for model_id in candidate_ids:
-        result, spec = cv_results[model_id], cv_results[model_id]["spec"]
-        rows.append(
-            {
-                "model_id": model_id,
-                "valid": result["valid"],
-                "eligible": spec["eligible_for_selection"],
-                "stability": assess_stability(result)[0]
-                if result["valid"]
-                else "ugyldig",
-                "pooled_deviance": pooled_oof_deviance(result)
-                if result["valid"]
-                else np.nan,
-                "n_parameters": spec["n_parameters"],
-                "df_order": tuple(
-                    FORM_DF.get(spec["forms"].get(f), 0) for f in CONTINUOUS_FEATURES
-                ),
-            }
-        )
-    table = pd.DataFrame(rows).set_index("model_id")
-    table["usable"] = (
-        table["valid"]
-        & table["eligible"]
-        & ~table["stability"].str.startswith("UAVKLART")
-    )
-    for model_id, row in table.loc[~table["usable"]].iterrows():
-        reason = (
-            "ugyldig"
-            if not row["valid"]
-            else ("ikke valgbar" if not row["eligible"] else row["stability"])
-        )
-        print(
-            f"{'UAVKLART' if reason.startswith('UAVKLART') else 'Utelatt'}: {model_id} ({reason})"
-        )
-    if not table.loc[anchor_id, "usable"]:
-        print(
-            f"UAVKLART: ankeret {anchor_id} er ikke brukbart; valget må avklares manuelt."
-        )
-        return {"selected": None, "table": table, "reason": "anker ikke brukbart"}
-
-    usable = table.loc[table["usable"]]
-    best = usable["pooled_deviance"].idxmin()
-    within = [
-        model_id
-        for model_id in usable.index
-        if model_id == best
-        or compare_models(cv_results, best, model_id, "forenkling")["passes_1se"]
-    ]
-    # Tie-break: færrest parametere, lavest df fører → verdi → ytelse, alfabetisk ID
-    chosen = min(
-        within,
-        key=lambda m: (usable.loc[m, "n_parameters"], usable.loc[m, "df_order"], m),
-    )
-    # Mot ankeret: færre parametere er forenkling (innen 1 SE), ellers oppgradering (B-08)
-    anchor_parameters = table.loc[anchor_id, "n_parameters"]
-    anchor_comparisons = pd.DataFrame(
-        [
-            compare_models(
-                cv_results,
-                anchor_id,
-                m,
-                "forenkling"
-                if usable.loc[m, "n_parameters"] < anchor_parameters
-                else "oppgradering",
+    if key not in frequency_candidates.CV_CACHE:
+        from_disk = frequency_candidates.cache_load(key)
+        if from_disk is None:
+            from_disk = cross_validate_glm(
+                candidate,
+                data,
+                folds,
+                fold_hook=frequency_candidates.frequency_curve_hook,
             )
-            for m in usable.index
-            if m != anchor_id
-        ]
-    )
-    chosen_row = (
-        anchor_comparisons.set_index("candidate").loc[chosen]
-        if chosen != anchor_id
-        else None
-    )
-    if chosen == anchor_id:
-        selected, reason = anchor_id, "ankeret er enklest innen 1 SE av beste kandidat"
-    elif chosen_row["direction"] == "forenkling":
-        selected, reason = (
-            (chosen, f"{chosen} er enklest innen 1 SE og innen 1 SE av ankeret")
-            if chosen_row["passes_1se"]
-            else (
-                anchor_id,
-                f"{chosen} er ikke innen 1 SE av ankeret; ankeret beholdes",
-            )
-        )
-    elif chosen_row["passes_b08"]:
-        selected, reason = (
-            chosen,
-            f"{chosen} er enklest innen 1 SE og slår ankeret etter B-08",
-        )
-    else:
-        selected, reason = (
-            anchor_id,
-            f"{chosen} slår ikke ankeret etter B-08; ankeret beholdes",
-        )
-    return {
-        "selected": selected,
-        "best": best,
-        "within_1se": within,
-        "table": table,
-        "anchor_comparisons": anchor_comparisons,
-        "reason": reason,
-    }
+            frequency_candidates.cache_store(key, from_disk)
+        frequency_candidates.CV_CACHE[key] = from_disk
+    cached, model_id = frequency_candidates.CV_CACHE[key], candidate["model_id"]
+    relabeled = {**cached, "spec": candidate, "oof": cached["oof"].rename(model_id)}
+    relabeled["scores"] = cached["scores"].assign(model=model_id)
+    for part in ("curves", "tails"):
+        if part in cached:
+            relabeled[part] = cached[part].assign(model_id=model_id)
+    return relabeled
 
+
+frequency_candidates.configure(
+    glm_spec=glm_spec,
+    fit_glm=fit_glm,
+    run_glm=run_glm,
+    cross_validate_glm=cross_validate_glm,
+    prepare_design_frame=prepare_design_frame,
+    apply_derived_columns=apply_derived_columns,
+    paired_improvement=paired_improvement,
+    sign_stability=sign_stability,
+    spline_stability=spline_stability,
+    pooled_oof_deviance=pooled_oof_deviance,
+    targets=TARGETS,
+    model_frame=model_frame,
+)
+# Bare-navn-bindinger så resten av notebooken kan bruke navnene uendret
+FEATURE_BLOCKS = frequency_candidates.FEATURE_BLOCKS
+CONTROL_BLOCKS = frequency_candidates.CONTROL_BLOCKS
+CORE_BLOCKS = frequency_candidates.CORE_BLOCKS
+CONTINUOUS_FEATURES = frequency_candidates.CONTINUOUS_FEATURES
+CONTINUOUS_FORMS = frequency_candidates.CONTINUOUS_FORMS
+FORM_DF = frequency_candidates.FORM_DF
+FORM_LABELS = frequency_candidates.FORM_LABELS
+SCORE_TOLERANCE = frequency_candidates.SCORE_TOLERANCE
+STABLE_SIGN_FOLDS = frequency_candidates.STABLE_SIGN_FOLDS
+MIN_STABILITY_EXPOSURE = frequency_candidates.MIN_STABILITY_EXPOSURE
+CURVE_GRIDS = frequency_candidates.CURVE_GRIDS
+build_frequency_candidate = frequency_candidates.build_frequency_candidate
+form_model_id = frequency_candidates.form_model_id
+build_curve_grid = frequency_candidates.build_curve_grid
+fit_full_curves = frequency_candidates.fit_full_curves
+frequency_curve_hook = frequency_candidates.frequency_curve_hook
+data_fingerprint = frequency_candidates.data_fingerprint
+assess_stability = frequency_candidates.assess_stability
+stability_passes = frequency_candidates.stability_passes
+ae_outside_noise = frequency_candidates.ae_outside_noise
+select_from_candidate_set = frequency_candidates.select_from_candidate_set
+compare_models = frequency_candidates.compare_models
 
 # %% [markdown]
-# **Kontroller fra faseplanens 3.12.** Asserts under stopper notebooken hvis en
-# av forutsetningene for fase 1 ikke holder.
-#
-# 1. Pooled score fra samlede OOF-prediksjoner = eksponeringsvektet snitt av
-#    foldscorene.
-# 2. Poisson antall + offset $\log e$ = rate med vekt $e$, også med splineledd.
-# 3. `cr(..., df=k, constraints='center')` gir $k$ kolonner og full rang, og
-#    `n_parameters` stemmer med opptelling av nivåer og df.
-# 4. Prediksjon utenfor treningsområdet krasjer ikke og er lineær på logskala.
+# **Kontroller fra faseplanens 3.12.** Flyttet til
+# `frequency_candidates.run_phase1_framework_checks` (se modulens docstring
+# for de fire punktene som kontrolleres). Kjøres her rett etter
+# `configure()`, siden kontrollene bruker referansemodellene fra 2.9;
+# funksjonen kaster `AssertionError` hvis en forutsetning ikke holder.
 
 # %%
-# 1. Pooled OOF-score = eksponeringsvektet snitt av foldscorene
-reference_result = reference_cv["frequency_policy_type_year"]
-reference_result = reference_result | {
-    "spec": reference_models["frequency_policy_type_year"]["spec"]
-}
-assert np.isclose(
-    pooled_oof_deviance(reference_result),
-    np.average(
-        reference_result["scores"]["val_deviance"],
-        weights=reference_result["scores"]["val_weight"],
-    ),
-    rtol=1e-12,
-)
+frequency_candidates.run_phase1_framework_checks(reference_cv, reference_models)
 
-# 2. Antall + offset = rate + vekt for en fase-1-spesifikasjon med splines
-spline_check = build_frequency_candidate(
-    "check_df4",
-    "F2",
-    CONTROL_BLOCKS + CORE_BLOCKS,
-    forms=dict.fromkeys(CONTINUOUS_FEATURES, "df4"),
-)
-spline_design = prepare_design_frame(
-    model_frame, model_frame, spline_check["required_columns"]
-)
-rate_fit = fit_glm(spline_check, spline_design)
-count_fit = smf.glm(
-    "property_claims ~" + spline_check["formula"].split("~")[1],
-    data=spline_design,
-    family=sm.families.Poisson(link=LOG_LINK),
-    offset=np.log(spline_design["total_exposure"]),
-).fit()
-assert np.allclose(count_fit.params, rate_fit.params, rtol=1e-6, atol=1e-8)
-assert np.isclose(count_fit.deviance, rate_fit.deviance, rtol=1e-8)
-
-# 3. Sentrerte cr-baser: df kolonner og full rang; n_parameters stemmer med opptelling
-for feature in CONTINUOUS_FEATURES:
-    for form in ("df3", "df4"):
-        basis = patsy.dmatrix(CONTINUOUS_FORMS[form].format(x=feature), spline_design)
-        assert basis.shape[1] == 1 + FORM_DF[form]  # intercept + df
-        assert np.linalg.matrix_rank(basis) == basis.shape[1]
-n_levels = spline_design[
-    [
-        FEATURE_BLOCKS[b]["column"]
-        for b in CONTROL_BLOCKS + CORE_BLOCKS
-        if "label" not in FEATURE_BLOCKS[b]
-    ]
-].nunique()
-assert spline_check["n_parameters"] == 1 + (n_levels - 1).sum() + 3 * FORM_DF["df4"]
-assert np.linalg.matrix_rank(rate_fit.model.exog) == spline_check["n_parameters"]
-
-# 4. Prediksjon utenfor treningsområdet: endelig, positiv og lineær på logskala
-middle_ages = spline_design["driver_age"].between(30, 65)
-range_check = build_frequency_candidate(
-    "check_range", "F2", ["product", "driver"], forms={"driver_age": "df4"}
-)
-range_fit = fit_glm(range_check, spline_design.loc[middle_ages])
-outside = spline_design.iloc[[0] * 6].assign(driver_age=[18, 20, 22, 75, 80, 85])
-outside_prediction = range_fit.predict(outside).to_numpy()
-assert np.isfinite(outside_prediction).all() and (outside_prediction > 0).all()
-assert np.allclose(np.diff(np.log(outside_prediction[:3]), 2), 0, atol=1e-8)
-assert np.allclose(np.diff(np.log(outside_prediction[3:]), 2), 0, atol=1e-8)
-del (
-    spline_design,
-    rate_fit,
-    count_fit,
-    range_fit,
-)  # store designobjekter trengs ikke videre
 
 # %% [markdown]
 # ### 3.2 Basis og lineær kjerne
@@ -2044,10 +1640,8 @@ frequency_cv = {
     candidate["model_id"]: cross_validate_candidate(candidate) for candidate in (F0, F1)
 }
 # F0 er samme spesifikasjon som referansemodellen i 2.9 og skal gi samme OOF-score
-assert np.isclose(
-    pooled_oof_deviance(frequency_cv["F0"]),
-    pooled_oof_deviance(reference_result),
-    rtol=1e-10,
+frequency_candidates.check_f0_matches_reference(
+    frequency_cv["F0"], reference_cv, reference_models
 )
 
 core_comparison = pd.DataFrame([compare_models(frequency_cv, "F0", "F1")])
@@ -3035,7 +2629,7 @@ def cross_validate_nb2(poisson_spec, model_id, folds=None, data=model_frame):
         val = data.loc[data.index.intersection(fold["val_index"])]
         try:
             (train_design, val_design), derived_state = prepare_fold_frames(
-                spec, train, [train, val]
+                spec, train, [train, val], prepare_design_frame
             )
             poisson_fit = fit_glm(spec, train_design)  # startverdier fra samme fold
             result = smf.negativebinomial(
@@ -3282,8 +2876,13 @@ print(f"Valgt etter B-08 (3.7–3.8): {B08_SELECTED_ID}")
 #   - I COMP_N er det i tillegg 25 % for mange nuller og bare 35 % av forventede
 #     poliseår med én skade.
 #   - En jevn risikoblanding gir ikke dette mønsteret. Registrering der én hendelse
-#     blir flere skader er en *hypotese* som må verifiseres manuelt før fase 2, fordi
-#     snittskade per skade påvirkes direkte.
+#     blir flere skader er en *hypotese*.
+#   - Datakilden (artikkelen bak datasettet) er sjekket manuelt. `property_claims`
+#     teller skader «related to material and personal damages» for COMP_E/COMP_N.
+#     Artikkelen sier ikke om skader telles per hendelse, per skadelinje eller per
+#     utbetaling, og nevner ingen avkapping eller støy. Årsaken er derfor
+#     fortsatt ukjent.
+#   - Konsekvensen er kvantifisert i 3.11, sensitivitet (5).
 #
 # Diagnostikken gjelder finalistene F0, F1, additiv F5 og F6_I1 (valgt etter
 # B-08 i 3.7–3.8). Tidsfolden og kontrollen med cluster-SE er grunnlaget for
@@ -3519,7 +3118,9 @@ for label, rows in [
     ("hele poolen", model_frame["year"].notna()),
 ]:
     subset = model_frame.loc[rows]
-    (design,), state = prepare_fold_frames(time_spec, subset, [subset])
+    (design,), state = prepare_fold_frames(
+        time_spec, subset, [subset], prepare_design_frame
+    )
     fit = fit_glm(
         time_spec, design, cluster_groups=pd.factorize(design["insured_id"])[0]
     )
@@ -3772,7 +3373,7 @@ display(
 # Fit på hele train-poolen med cluster-kovarians på insured_id (B-21); gjenbrukes i 3.10
 final_spec = final_result["spec"]
 (final_design,), final_state = prepare_fold_frames(
-    final_spec, model_frame, [model_frame]
+    final_spec, model_frame, [model_frame], prepare_design_frame
 )
 assert final_design.index.equals(model_frame.index)
 cluster_groups = pd.factorize(final_design["insured_id"])[0]
@@ -3856,7 +3457,8 @@ display(
 # - Balansen in-sample er 1. Antall med offset gir samme fit som rate med vekt.
 # - **Tolkning:** effektene er prediktive, ikke kausale.
 #   - Betalingsfrekvens og forretningstype fanger trolig kundeatferd og seleksjon.
-#   - COMP_N-relativiteten kan være påvirket av skadetellingen (3.9, UAVKLART).
+#   - COMP_N-relativiteten avhenger av hvordan skadene telles: ×3,66 med fullt antall,
+#     ×2,98 med antall kappet ved 3 (3.11, sensitivitet 5).
 #   - Timingforbeholdet (B-27) gjelder alle risikofelt.
 #
 # F5 (B-30) estimeres på hele train-poolen (fitten fra 3.9):
@@ -3970,6 +3572,33 @@ display(
 #     noteres til fase 3.
 # - **Kjøreerfaring** i stedet for alder er dårligere i alle former (lineær 0/5,
 #   df3 og df4 2/5 folder). Alder beholdes (B-11).
+# - **Skadetelling og pukkelen (B-03):**
+#   - **Nesten bare produktnivået påvirkes.** COMP_N-relativiteten flytter seg
+#     mye med tellemåten:
+#     - ×3,66 med fullt antall.
+#     - ×2,98 med antall kappet ved 3 (−6,2 SE).
+#     - ×2,07 med skade ja/nei.
+#   - Forretningstype P går fra ×1,36 til ×1,29 (−1,5 SE). Alle andre effekter
+#     flytter seg ≤1 SE ved kapping. Skiftene er målt i hovedmodellens SE og er
+#     ikke en formell test.
+#   - **De høye antallene ligger systematisk, ikke tilfeldig.** Scoret på fullt
+#     antall taper modellen med kappet antall både i gruppe-CV (−0,0028, z −2,9,
+#     2/5 folder) og i tidsfolden (−0,0057, z −5,1).
+#     - De høye antallene er altså forutsigbare på segmentnivå, særlig COMP_N og
+#       forretningstype P.
+#     - Om de er reell risiko eller registreringspraksis, kan dataene ikke avgjøre.
+#   - **Hovedmodellen på vanlige skader:** scoret på kappet antall taper
+#     hovedmodellen innen samme periode (z −3,9, 0/5 folder), men ikke fremover i
+#     tid (z −0,3). Pukkelen kan altså gi for høye prediksjoner på vanlige skader i
+#     COMP_N. *Usikkert.*
+#   - **B-03 står.** Fullt antall beholdes som frekvensrespons.
+#     - COMP_N-nivået oppgis som usikkert: ca. ×3,0–3,7 per skade og ×2,1 per
+#       poliseår med skade.
+#     - En engangssjekk utenfor notebooken viser at poliseår med 4 skader koster
+#       ca. 3 ganger så mye som poliseår med 1. Pukkelen er derfor reell kostnad
+#       og skal med i nivået for ren premie.
+#     - Usikkerheten gjelder først og fremst fordelingen mellom frekvens og
+#       snittskade.
 # - Merkegrense 250/1 000 kjøres ikke fordi merke ikke kvalifiserte (3.5).
 #   Bonus kjøres ikke fordi as-of-porten ikke er bestått (B-13).
 #
@@ -4013,17 +3642,22 @@ display(
 # foldmedianen. Ingen produkthelning tas med (B-28, B-30). Definisjonen av
 # erfaring er uavklart (B-11), så ingen erfaringsmodell kan rykke opp.
 #
+# **(5) Skadetelling / pukkelen (B-03)** beskrives i egen celle rett før
+# beregningen.
+#
 # **Utgår eller utsettes.**
 #
 # - **(3) Merkegrense 250/1 000** utgår: merke kvalifiserte ikke ved 500 (3.5)
 #   og er ikke i finalisten.
-# - **(5) Bonus** kjøres ikke. As-of-porten er ikke bestått (B-13), og bonus er
-#   ikke nødvendig for å ferdigstille fase 1. A/E per bonusnivå står i 3.9.
-# - **(6) Lagget skadehistorikk og (7) ridge** er utsatt etter planens 3.10: historikk
-#   krever egen populasjon og tidsdesign, og ingen nær-kollinearitet eller
-#   ustabile kurver tilsier regularisering.
+# - **(6) Bonus** (planens pkt. 5) kjøres ikke. As-of-porten er ikke bestått
+#   (B-13), og bonus er ikke nødvendig for å ferdigstille fase 1. A/E per
+#   bonusnivå står i 3.9.
+# - **(7) Lagget skadehistorikk og (8) ridge** (planens pkt. 6–7) er utsatt etter
+#   planens 3.10: historikk krever egen populasjon og tidsdesign, og ingen
+#   nær-kollinearitet eller ustabile kurver tilsier regularisering.
 #
-# **Tabell 1:** uten kansellerte. **Tabell 2 og plottet:** erfaring mot alder.
+# **Tabell 1:** uten kansellerte. **Tabell 2 og plott 1:** erfaring mot alder.
+# **Plott 2:** relativiteter med tre skadetellinger (5).
 
 # %%
 # (1) Uten kansellerte: tren bare på aktive rader i hver eksisterende fold
@@ -4207,6 +3841,346 @@ display(
 )
 
 # %% [markdown]
+# **(5) Skadetelling / pukkelen (B-03).** 1,5 % av poliseårene har minst fire
+# skader og står for 38 % av skadene, mest i COMP_N (rootogrammet i 3.9). Hvis
+# pukkelen er registreringspraksis (én hendelse blir flere skader), kan den trekke
+# relativitetene. Samme F5-spesifikasjon, offset og folder estimeres med tre
+# responser:
+#
+# $$
+# \log E[Y_i]=\log e_i+\eta_i^{\text{F5}},\qquad
+# Y_i\in\bigl\{\underbrace{N_i}_{\text{a) fullt antall}},\;
+# \underbrace{\min(N_i,3)}_{\text{b) kappet ved 3}},\;
+# \underbrace{\mathbf 1\{N_i>0\}}_{\text{c) skade ja/nei}}\bigr\}.
+# $$
+#
+# c) er standardtilnærmingen for skadeteller-frekvens:
+# $P(N_i>0)=1-e^{-\lambda_i e_i}\approx\lambda_i e_i$ når $\lambda_i e_i$ er
+# liten. *Intuisjon:* b) og c) gir en polise med fem skader samme vekt som én med
+# tre eller én skade. En relativitet som flytter seg, bæres delvis av pukkelen.
+#
+# - **Relativiteter:** in-sample på hele train-poolen med cluster-KI (plott 2).
+# - **Rangering:** deviance på ulike responser er ikke sammenlignbar, og b) og c)
+#   predikerer et lavere nivå. Nivået rekalibreres derfor med én faktor lært i
+#   treningsfolden $T_k$:
+#
+# $$
+# c_k=\frac{\sum_{i\in T_k}N_i}{\sum_{i\in T_k}e_i\,\hat\lambda_i^{(\mathrm{b/c})}} ,
+# $$
+#
+# og alle modellene scores med Poisson-deviance på *fullt* antall i
+# valideringsfolden, som i hovedstigen. Én konstant endrer ikke rekkefølgen, så
+# sammenligningen måler rangering og relativiteter, ikke nivå. Motsatt retning:
+# a) rekalibreres til $\sum\min(N_i,3)$ og scores mot b) på kappet antall. Det
+# viser om hovedmodellen rangerer «vanlige» skader dårligere. Samme sammenligning
+# kjøres i tidsfolden 2022 → 2023 uten årsledd (B-25).
+#
+# Dette er en sensitivitet: ingen modell endres, og b) og c) er ikke kandidater.
+
+# %%
+# (5) Skadetelling / pukkelen (B-03). SENSITIVITET: F5 holdes fast (B-30);
+# bare responsen byttes i kopier av spesifikasjonen, og ingen modell endres.
+import matplotlib.pyplot as plt
+
+from src.own_damage_descriptives import AXIS, GRIDLINE, SURFACE
+from src.phase_2.frequency_plots import _MODEL_COLORS, _style_axes
+
+RESPONSE_LABELS = {
+    "main": "fullt antall",
+    "cap3": "kappet ved 3",
+    "claimant": "skade ja/nei",
+}
+RATE_COLUMNS = {
+    "main": "claim_frequency",
+    "cap3": "claim_frequency_cap3",
+    "claimant": "claim_frequency_claimant",
+}
+capped_claims = model_frame["property_claims"].clip(upper=3)
+claimant = model_frame["property_claims"].gt(0).astype(float)
+count_frame = model_frame.assign(
+    claims_cap3=capped_claims,
+    claim_frequency_cap3=capped_claims / model_frame["total_exposure"],
+    claim_frequency_claimant=claimant / model_frame["total_exposure"],
+)
+
+
+def with_response(spec, name):
+    """Kopi av ``spec`` med respons ``name``; høyresiden (F5) er uendret."""
+    if name == "main":
+        return spec
+    y = RATE_COLUMNS[name]
+    return spec | {
+        "name": f"{spec['name']}_{name}",
+        "model_id": f"{spec['model_id']}_{name}",
+        "y": y,
+        "formula": f"{y} ~" + spec["formula"].split("~")[1],
+    }
+
+
+# --- In-sample relativiteter med cluster-KI på hele train-poolen ---
+response_design = final_design.assign(
+    **{column: count_frame[column] for column in RATE_COLUMNS.values()}
+)
+count_fits = {
+    name: fit_glm(
+        with_response(final_spec, name), response_design, cluster_groups=cluster_groups
+    )
+    for name in RATE_COLUMNS
+}
+assert np.allclose(count_fits["main"].params, final_fit.params, rtol=1e-8)
+
+
+def response_effects(name):
+    """Relativiteter (uten basisnivåer) og alder ved gridendene mot referansen, med cluster-KI."""
+    spec, fit = with_response(final_spec, name), count_fits[name]
+    table = build_effect_table(
+        build_relativity_table(spec, fit),
+        linear_scales={"log_vehicle_value": (np.log(1.1), "+10 % kjøretøyverdi")},
+    ).dropna(subset=["standardfeil"])
+    table.index = [
+        change if variable == "log_vehicle_value" else f"{variable} {level}"
+        for (variable, level), change in zip(table.index, table["endring"])
+    ]
+    # Alder som i 3.10: deltametode med uskalert cluster-kovarians (B-23)
+    view = SimpleNamespace(
+        model=fit.model,
+        params=fit.params,
+        cov_params=fit.cov_params,
+        pearson_chi2=1.0,
+        df_resid=1.0,
+        scale=1.0,
+    )
+    ends = (
+        frequency_curve_hook(
+            spec, "full", view, response_design, response_design, final_state
+        )["curves"]
+        .query("feature == 'driver_age'")
+        .sort_values("x")
+        .iloc[[0, -1]]
+    )
+    reference = CURVE_GRIDS["driver_age"]["reference"]
+    ages = pd.DataFrame(
+        {
+            "koeffisient": np.log(ends["relative"].to_numpy()),
+            "standardfeil": ends["se_log"].to_numpy(),
+        },
+        index=[f"alder {x:.0f} mot {reference:.0f} år" for x in ends["x"]],
+    )
+    ages["relativitet"] = np.exp(ages["koeffisient"])
+    ages["ki_lav"] = np.exp(ages["koeffisient"] - 1.96 * ages["standardfeil"])
+    ages["ki_høy"] = np.exp(ages["koeffisient"] + 1.96 * ages["standardfeil"])
+    columns = ["koeffisient", "standardfeil", "relativitet", "ki_lav", "ki_høy"]
+    return pd.concat([table[columns], ages[columns]])
+
+
+count_effects = {name: response_effects(name) for name in RATE_COLUMNS}
+main_effects = count_effects["main"]
+# Kontroll mot 3.10: samme relativiteter for fullt antall
+assert np.allclose(
+    main_effects.loc["policy_type COMP_N", "relativitet"],
+    effect_table.loc[("policy_type", "COMP_N"), "relativitet"],
+)
+print(
+    "In-sample relativiteter, "
+    + "; ".join(
+        f"{RESPONSE_LABELS[name]}: COMP_N ×{effects.loc['policy_type COMP_N', 'relativitet']:.3f}, "
+        f"P ×{effects.loc['business_type P', 'relativitet']:.3f}"
+        for name, effects in count_effects.items()
+    )
+)
+for name in ["cap3", "claimant"]:
+    effects = count_effects[name]
+    # Skift i koeffisient målt i hovedmodellens cluster-SE; SE-forhold mot hovedmodellen
+    shift = (effects["koeffisient"] - main_effects["koeffisient"]) / main_effects[
+        "standardfeil"
+    ]
+    se_ratio = effects["standardfeil"] / main_effects["standardfeil"]
+    print(
+        f"{RESPONSE_LABELS[name]} mot fullt antall: største skift "
+        + "; ".join(
+            f"{label} ×{effects.loc[label, 'relativitet']:.3f} ({shift[label]:+.1f} SE)"
+            for label in shift.abs().sort_values(ascending=False).index[:3]
+        )
+        + ". Største endring i cluster-SE: "
+        + "; ".join(
+            f"{label} ×{se_ratio[label]:.2f}"
+            for label in np.log(se_ratio).abs().sort_values(ascending=False).index[:3]
+        )
+    )
+
+# Plott 2: punkt + 95 % cluster-KI per relativitet, én farge per respons
+labels = main_effects.index
+fig, ax = plt.subplots(figsize=(7.5, 0.42 * len(labels) + 1.4), facecolor=SURFACE)
+positions = np.arange(len(labels))
+ax.axvline(1, color=AXIS, linewidth=1)
+for offset, name, color in zip([-0.22, 0.0, 0.22], RATE_COLUMNS, _MODEL_COLORS):
+    effects = count_effects[name].loc[labels]
+    ax.errorbar(
+        effects["relativitet"],
+        positions + offset,
+        xerr=[
+            effects["relativitet"] - effects["ki_lav"],
+            effects["ki_høy"] - effects["relativitet"],
+        ],
+        fmt="o",
+        markersize=4,
+        capsize=2,
+        linewidth=1,
+        color=color,
+        label=RESPONSE_LABELS[name],
+    )
+ax.set_xscale("log")
+ticks = [0.8, 1, 1.25, 1.5, 2, 3, 4]
+ax.set_xticks(ticks, [f"{tick:g}".replace(".", ",") for tick in ticks])
+ax.minorticks_off()
+ax.set_yticks(positions, labels)
+ax.invert_yaxis()
+_style_axes(
+    ax,
+    f"Sensitivitet: relativiteter i {FREQUENCY_MODEL_ID} med tre skadetellinger",
+    "",
+    "Relativitet (log-skala), 95 % cluster-KI",
+)
+ax.yaxis.grid(False)
+ax.xaxis.grid(True, color=GRIDLINE, linewidth=0.8)
+ax.legend(frameon=False, fontsize=8, loc="lower right")
+fig.tight_layout()
+plt.close(fig)
+display(fig)
+
+
+# --- Rangering: gruppe-CV og tidsfold med nivå rekalibrert i treningsfolden ---
+def calibration_hook(spec, fold_name, result, train_design, val_design, derived_state):
+    """Faktorer i treningsfolden: faktisk antall (fullt og kappet) / forventet antall."""
+    expected = (result.predict(train_design) * train_design["total_exposure"]).sum()
+    return {
+        "calibration": pd.DataFrame(
+            {
+                "fold": [fold_name],
+                "to_main": [train_design["property_claims"].sum() / expected],
+                "to_cap3": [train_design["claims_cap3"].sum() / expected],
+            }
+        )
+    }
+
+
+def rescaled_predictions(result, folds, target):
+    """Valideringsrater skalert med faktoren fra treningsfolden til respons ``target``."""
+    fold_of_row = pd.concat(
+        [pd.Series(fold["fold"], index=fold["val_index"]) for fold in folds]
+    )
+    factors = result["calibration"].set_index("fold")[f"to_{target}"]
+    return result["oof"].loc[fold_of_row.index] * fold_of_row.map(factors)
+
+
+def ranking_comparison(results, folds, baseline, candidate, target):
+    """Parvis gevinst (basis − kandidat) på respons ``target``; > 0 betyr kandidat bedre."""
+    rate = RATE_COLUMNS[target]
+    predictions = {
+        name: rescaled_predictions(results[name], folds, target)
+        for name in (baseline, candidate)
+    }
+    rows = predictions[baseline].index
+    cluster = paired_deviance_gain(
+        count_frame.loc[rows, rate],
+        count_frame.loc[rows, "total_exposure"],
+        predictions[baseline],
+        predictions[candidate].loc[rows],
+        count_frame.loc[rows, "insured_id"],
+    )
+    row = {
+        "baseline": baseline,
+        "candidate": candidate,
+        "target": target,
+        "pooled_gain": cluster["gevinst"],
+        "se_cluster": cluster["SE_cluster"],
+        "z_cluster": cluster["z"],
+    }
+    if len(folds) > 1:  # fold-SE og folder bedre, som paired_improvement i (1)
+        fold_scores = [
+            {
+                "model": name,
+                "fold": fold["fold"],
+                "val_weight": part["total_exposure"].sum(),
+                "val_deviance": mean_tweedie_deviance(
+                    part[rate],
+                    predictions[name].loc[part.index],
+                    sample_weight=part["total_exposure"],
+                    power=1,
+                ),
+            }
+            for fold in folds
+            for part in [count_frame.loc[fold["val_index"]]]
+            for name in predictions
+        ]
+        paired = paired_improvement(pd.DataFrame(fold_scores), baseline, candidate)
+        assert np.isclose(paired["pooled_forbedring"], cluster["gevinst"], rtol=1e-6)
+        row |= {
+            "mean_gain": paired["snitt_forbedring"],
+            "se_gain": paired["standardfeil"],
+            "folds_improved": paired["folder_med_forbedring"],
+            "near_miss_3of5": bool(
+                paired["pooled_forbedring"] > 0
+                and paired["snitt_forbedring"] > paired["standardfeil"]
+                and paired["folder_med_forbedring"] == 3
+            ),
+        }
+    return row
+
+
+time_spec = without_year(FREQUENCY_MODEL_ID)
+count_cv, count_time = {}, {}
+for name in RATE_COLUMNS:
+    count_cv[name] = cross_validate_glm(
+        with_response(final_spec, name), count_frame, cv_folds, calibration_hook
+    )
+    count_time[name] = cross_validate_glm(
+        with_response(time_spec, name), count_frame, time_fold, calibration_hook
+    )
+    for result in (count_cv[name], count_time[name]):
+        assert result["valid"], result["error"]
+# Kontroller: fullt antall gjenskaper hovedstigen, og Poisson-balansen gir faktor 1
+assert np.allclose(count_cv["main"]["oof"], final_oof, rtol=1e-8)
+assert np.allclose(
+    count_time["main"]["oof"].loc[time_val.index],
+    time_predictions[FREQUENCY_MODEL_ID],
+    rtol=1e-8,
+)
+assert np.allclose(count_cv["main"]["calibration"]["to_main"], 1, atol=1e-6)
+print(
+    "Rekalibreringsfaktor til fullt antall (gruppefolder; tidsfold): "
+    + "; ".join(
+        f"{RESPONSE_LABELS[name]} {count_cv[name]['calibration']['to_main'].min():.3f}–"
+        f"{count_cv[name]['calibration']['to_main'].max():.3f}; "
+        f"{count_time[name]['calibration']['to_main'].iloc[0]:.3f}"
+        for name in ["cap3", "claimant"]
+    )
+)
+
+COUNT_COMPARISONS = [
+    ("main", "cap3", "main"),
+    ("main", "claimant", "main"),
+    ("cap3", "main", "cap3"),  # motsatt retning: hovedmodellen på kappet antall
+]
+group_rankings = pd.DataFrame(
+    [ranking_comparison(count_cv, cv_folds, *c) for c in COUNT_COMPARISONS]
+)
+time_rankings = pd.DataFrame(
+    [ranking_comparison(count_time, time_fold, *c) for c in COUNT_COMPARISONS]
+)
+report_near_misses(group_rankings)
+for group, in_time in zip(group_rankings.itertuples(), time_rankings.itertuples()):
+    print(
+        f"{RESPONSE_LABELS[group.candidate]} mot {RESPONSE_LABELS[group.baseline]}, "
+        f"scoret på {RESPONSE_LABELS[group.target]} (gevinst > 0: kandidat bedre). "
+        f"Gruppe-CV: poolet {group.pooled_gain:.6f}, snitt {group.mean_gain:.6f}, "
+        f"fold-SE {group.se_gain:.6f}, cluster-SE {group.se_cluster:.6f} "
+        f"(z {group.z_cluster:+.1f}), bedre i {group.folds_improved}/5 folder. "
+        f"Tidsfold 2022→2023: {in_time.pooled_gain:.6f}, cluster-SE "
+        f"{in_time.se_cluster:.6f} (z {in_time.z_cluster:+.1f})"
+    )
+
+# %% [markdown]
 # ### 3.12 Oppsummering fase 1
 #
 # **Leveranse fra fase 1**
@@ -4249,9 +4223,16 @@ display(
 #
 # **Åpne punkter til planrevisjonen før fase 2**
 #
-# 1. **Skadetellingen (UAVKLART, B-03):** pukkelen ved N = 4–5 og nullinflasjonen i
-#    COMP_N må undersøkes før severity. Blir én hendelse registrert som flere
-#    skader, blir snittskaden per skade feil nivå.
+# 1. **Skadetellingen (UAVKLART, B-03):** hvordan skadene telles i pukkelen
+#    (N = 4–5), er ikke dokumentert i datakilden.
+#    - COMP_N-nivået i frekvens avhenger av tellemåten (3.11, sensitivitet 5).
+#    - Vurder i planrevisjonen å endre den todelte modellen til andel poliseår med
+#      skade × kostnad per skadepoliseår. Den er uavhengig av hvordan skadene
+#      telles.
+#    - Tweedie beholdes som kontroll for nivået i ren premie.
+#    - Datakilden opplyser også at skadebeløp gjøres opp etter CICOS-avtalen med
+#      forhåndsavtalte beløp, så beløpene kan klumpe seg. Det må sjekkes i
+#      severity.
 # 2. **B-08:** vurder parvis cluster-SE på `insured_id` i stedet for fold-SE.
 # 3. **Nivådrift 2022→2023,** særlig i COMP_N. Det påvirker nivåsetting og
 #    tidsfolden i fase 2–3.

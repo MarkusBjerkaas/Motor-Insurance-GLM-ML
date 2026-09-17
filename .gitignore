@@ -12,6 +12,9 @@ wheels/
 # Disposable scripts (see CLAUDE.md)
 src_temp/
 
+# Cache av CV-resultater på disk (se cross_validate_candidate)
+.cv_cache/
+
 # Local environment variables and secrets
 .env
 .env.*
