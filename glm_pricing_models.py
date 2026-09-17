@@ -91,7 +91,12 @@ from src.model_data import (
     to_model_frame,
 )
 from src.own_damage_descriptives import CURRENCY_ZERO_TOLERANCE
-from src.phase_2 import frequency_candidates
+from src.phase_2 import (
+    frequency_candidates,
+    interactions,
+    secondary_blocks,
+    sensitivities,
+)
 from src.phase_2.frequency_plots import (
     plot_actual_expected,
     plot_fold_curves,
@@ -1696,12 +1701,20 @@ display(
 # Valget følger regelen i 3.1: enklest innen 1 SE av beste kandidat, og valget
 # må slå F1 etter B-08.
 #
-# **Tabell 1** viser hele rutenettet sortert etter pooled OOF-deviance. Kolonnen
-# `ledd_endret` er antall ledd som ikke er lineære, så `1` er deltakandidatene
-# mot F1. Gevinst og folder er mot F1. **Plottet** viser relative kurver per
-# fold (tynne linjer) og fit på hele train-poolen med ±2 SE (tykk linje) på
-# visningsgridet, med eksponeringsstøtte nederst. **Tabell 2** viser halene:
-# relativ prediksjon ved treningsområdets min og maks, som gridet ikke dekker.
+# **Andre variable holdes fikset** for alle 27 kombinasjonene: kontrollene
+# (`policy_type`, `year`) og de kategoriske kjerneleddene (drivstoff,
+# sirkulasjonsområde, kommunetype, betalingsfrekvens, forretningstype) er
+# uendret; det er bare formen på de tre kontinuerlige leddene som varierer.
+#
+# **Tabell 1** viser topp 5 kombinasjoner sortert etter pooled OOF-deviance
+# (hele rutenettet med 27 kandidater er kryssvalidert, men bare de beste vises
+# her). Kolonnen `ledd_endret` er antall ledd som ikke er lineære, så `1` er
+# deltakandidatene mot F1. Gevinst og folder er mot F1. **Plottet** viser
+# relative kurver per fold (tynne linjer) og fit på hele train-poolen med ±2 SE
+# (tykk linje) på visningsgridet, med eksponeringsstøtte nederst — dette er
+# marginaleffekten av hvert kontinuerlig ledd med de andre leddene fiksert.
+# **Tabell 2** viser halene: relativ prediksjon ved treningsområdets min og
+# maks, som gridet ikke dekker.
 
 # %%
 form_grid_ids = []
@@ -1759,7 +1772,7 @@ form_table = (
 )
 # F1 er ankeret og har ingen sammenligningsrad; nær-null-effektene fra 3.2 vises
 form_table.loc["F1", "note"] = core_comparison.loc[0, "note"]
-display(form_table)
+display(form_table.head(5))
 
 # %%
 # Plott: valgt form, og beste kandidat når den er en annen (lineære ledd gir rette linjer)
@@ -1804,6 +1817,13 @@ tail_table = (
 )
 display(tail_table.round(3))
 
+# %% [markdown]
+# **Merknad om ytelse:** valgt form har ytelse lineær. Ablasjonen i 3.4 viser at
+# ytelse ligger svært nær grensen for fjerning (0,1 SE) gitt den lineære formen.
+# Om ytelse som spline (df=3/4) ville gjort bidraget mer eller mindre tydelig er
+# ikke testet denne fasen — ablasjonen i 3.4 bruker formene fra 3.3 slik de er
+# valgt her, og går ikke tilbake og prøver alternative former på de leddene som
+# testes for fjerning.
 
 # %% [markdown]
 # ### 3.4 Ablasjon (F3)
@@ -1925,81 +1945,12 @@ display(ablation_table.sort_values("snitt_tap"))
 # fem foldtreningene.
 
 # %%
-secondary_options = {
-    "none": [],
-    "brand": ["brand"],
-    "seats": ["seats"],
-    "brand-seats": ["brand", "seats"],
-}
-f4_ids = {}
-for label, extra_blocks in secondary_options.items():
-    if not extra_blocks:
-        f4_ids[label] = f2_id  # ingen ekstra blokk er valgt F2
-        continue
-    model_id = "F4_" + label
-    frequency_cv[model_id] = cross_validate_candidate(
-        build_frequency_candidate(
-            model_id,
-            "F4",
-            f2_spec["feature_blocks"] + extra_blocks,
-            forms=f2_spec["forms"],
-            parent_id=f2_id,
-        )
-    )
-    f4_ids[label] = model_id
-
-f4_selection = select_from_candidate_set(frequency_cv, list(f4_ids.values()), f2_id)
-# Hver utvidelse mot F2, og betinget bidrag innen paret av sekundære blokker
-f4_comparisons = pd.DataFrame(
-    [
-        compare_models(frequency_cv, f2_id, f4_ids[k])
-        for k in ("brand", "seats", "brand-seats")
-    ]
-    + [
-        compare_models(frequency_cv, f4_ids["seats"], f4_ids["brand-seats"]),
-        compare_models(frequency_cv, f4_ids["brand"], f4_ids["brand-seats"]),
-    ]
+secondary_result = secondary_blocks.run_secondary_blocks(
+    cross_validate_candidate, frequency_cv, f2_id, f2_spec, model_frame, cv_folds
 )
-report_near_misses(f4_comparisons)
-print(
-    f"Beste: {f4_selection['best']}. Innen 1 SE: {', '.join(f4_selection['within_1se'])}."
-)
-print(f"Valgt: {f4_selection['selected']} ({f4_selection['reason']})")
-
-# Tabell 1: sammenligninger med kandidatens score, stabilitet og valgflagg
-f4_scores = build_candidate_table(frequency_cv, list(f4_ids.values()))[
-    ["parametere", "oof_deviance", "oof_d2"]
-].assign(
-    stabilitet=f4_selection["table"]["stability"],
-    i_1SE_sett=lambda t: t.index.isin(f4_selection["within_1se"]),
-    valgt=lambda t: t.index == f4_selection["selected"],
-)
-display(
-    format_comparison_table(f4_comparisons)
-    .drop(columns=["Retning", "near_miss_3of5", "stability"])
-    .join(f4_scores, on="Kandidat")
-    .set_index(["Referanse", "Kandidat"])
-)
-
-# Tabell 2: støtte per nivå i train-poolen og minste støtte i en foldtrening
-support_tables = {}
-for block in ("brand", "seats"):
-    column = FEATURE_BLOCKS[block]["column"]
-    counts = ["total_exposure", "property_claims"]
-    fold_support = pd.concat(
-        [
-            model_frame.loc[fold["train_index"]].groupby(column)[counts].sum()
-            for fold in cv_folds
-        ]
-    ).groupby(level=0)
-    support_tables[block] = (
-        model_frame.groupby(column)[counts]
-        .sum()
-        .join(fold_support.min().add_prefix("min_fold_"))
-        .rename_axis("nivå")
-        .sort_values("total_exposure", ascending=False)
-    )
-display(pd.concat(support_tables, names=["blokk"]).round(1))
+f4_ids = secondary_result["f4_ids"]
+display(secondary_result["comparison_table"])  # Tabell 1
+display(secondary_result["support_table"])  # Tabell 2
 
 # %% [markdown]
 # ### 3.6 Kontrollert reduksjon (F5) og avsluttende formsjekk
@@ -2079,7 +2030,7 @@ def deletion_ae_flags(cv_results, current_id, reduced_id, block):
     ]
 
 
-full_id = f4_selection["selected"]
+full_id = secondary_result["selection"]["selected"]
 current_id, removed, reduction_rows = full_id, [], []
 for step in itertools.count(1):
     current_spec = frequency_cv[current_id]["spec"]
@@ -2301,231 +2252,30 @@ print(f"Frosset additiv frekvensmodell: {FREQUENCY_ADDITIVE_ID}")
 # Teståret 2024 skal aldri inn i seksjon 3 (B-05)
 assert "test" not in frames and set(model_frame["year"]) == set(TRAIN_YEARS)
 additive_spec = frequency_cv[FREQUENCY_ADDITIVE_ID]["spec"]
-INTERACTION_PRODUCTS = ["COMP_E", "COMP_N"]  # basis først (B-24); CC er utenfor (B-29)
-interaction_features = {"I1": "driver_age", "I2": "log_vehicle_value"}
-feature_short = {
-    block["column"]: block["label"]
-    for block in FEATURE_BLOCKS.values()
-    if "label" in block
-}
 
-
-def product_slopes(feature):
-    """B-28 etter B-29: kolonnen 1{COMP_N}·(x − c), der c læres i treningsfolden."""
-    terms = [f"comp_n_slope_{feature}"]
-
-    def learn(train_design):
-        # Eksponeringsvektet snitt etter imputasjon (B-09)
-        return np.average(train_design[feature], weights=train_design["total_exposure"])
-
-    def apply(frame, center):
-        centered = frame[feature] - center
-        return frame.assign(**{terms[0]: frame["policy_type"].eq("COMP_N") * centered})
-
-    return {
-        "name": f"product_x_{feature}",
-        "slope_feature": feature,
-        "terms": terms,
-        "learn": learn,
-        "apply": apply,
-    }
-
-
-def tertile_support(feature):
-    """Støtte per produkt × felles eksponeringstredel i hver foldtrening (B-28)."""
-    rows, edges = [], []
-    for fold in cv_folds:
-        train = model_frame.loc[fold["train_index"]]
-        train = prepare_design_frame(train, train, [feature])
-        values = train[feature].to_numpy()
-        order = np.argsort(values, kind="stable")
-        cumulative = np.cumsum(train["total_exposure"].to_numpy()[order])
-        # Minste x der kumulativ sortert eksponering når 1/3 og 2/3
-        q1, q2 = values[order][
-            np.searchsorted(cumulative / cumulative[-1], [1 / 3, 2 / 3])
-        ]
-        edges.append((q1, q2))
-        if not q1 < q2:
-            continue  # sammenfallende grenser er svikt; det lages ikke nye grenser
-        tertile = pd.cut(
-            train[feature], [-np.inf, q1, q2, np.inf], labels=["T1", "T2", "T3"]
-        )
-        cells = train.groupby(["policy_type", tertile], observed=False)[
-            ["total_exposure", "property_claims"]
-        ].sum()
-        product_claims = train.groupby("policy_type")["property_claims"].sum()
-        rows.append(
-            cells.assign(
-                fold=fold["fold"],
-                product_claims=product_claims.reindex(
-                    cells.index.get_level_values("policy_type")
-                ).to_numpy(),
-            )
-        )
-    table = (
-        pd.concat(rows)
-        .groupby(level=[0, 1], observed=False)
-        .agg(
-            min_fold_eksponering=("total_exposure", "min"),
-            min_fold_skader=("property_claims", "min"),
-            maks_fold_skader=("property_claims", "max"),
-            min_fold_skader_produkt=("product_claims", "min"),
-        )
-        .rename_axis(["produkt", "tredel"])
-    )
-    passes = bool(
-        all(q1 < q2 for q1, q2 in edges)
-        and len(rows) == len(cv_folds)
-        and table["min_fold_eksponering"].ge(50).all()
-        and table["min_fold_skader_produkt"].ge(20).all()
-    )
-    return table, passes, edges
-
-
-support_tables, support_passes = {}, {}
-for label, feature in interaction_features.items():
-    if feature not in additive_spec["forms"]:
-        print(f"{label} utgår: {feature} er fjernet i F5")
-        continue
-    support_tables[label], support_passes[label], edges = tertile_support(feature)
-    q1s, q2s = zip(*edges)
-    print(
-        f"{label} ({feature}): tredelgrenser q1 {min(q1s):.3f}–{max(q1s):.3f}, "
-        f"q2 {min(q2s):.3f}–{max(q2s):.3f} over foldene; "
-        f"støtteport {'bestått' if support_passes[label] else 'SVIKTER'}"
-    )
-
-# Tabell 1: minste støtte per celle over de fem foldtreningene (skader uten terskel)
-display(pd.concat(support_tables, names=["interaksjon"]).round(1))
-
+support_table, support_passes = interactions.test_interaction_support(
+    model_frame, cv_folds, prepare_design_frame, additive_spec
+)
+display(support_table)  # Tabell 1
 
 # %%
-def interaction_candidate(model_id, features):
-    """Additiv modell + COMP_N-helning for hver av ``features``, med produktvise kurver."""
-    candidate = build_frequency_candidate(
-        model_id,
-        "F6",
-        additive_spec["feature_blocks"],
-        forms=additive_spec["forms"],
-        parent_id=FREQUENCY_ADDITIVE_ID,
-        derived=[product_slopes(feature) for feature in features],
-    )
-    # Rangkontroll mot den additive modellen: nøyaktig én ny parameter per interaksjon
-    assert candidate["n_parameters"] == additive_spec["n_parameters"] + len(features)
-    return candidate | {"curve_products": INTERACTION_PRODUCTS}
-
-
-f6_ids = {}
-for label, feature in interaction_features.items():
-    if not support_passes.get(label, False):
-        print(f"{label} estimeres ikke: støtteporten er ikke bestått")
-        continue
-    model_id = f"F6_{label}_product-x-{feature_short[feature]}"
-    frequency_cv[model_id] = cross_validate_candidate(
-        interaction_candidate(model_id, [feature])
-    )
-    f6_ids[label] = model_id
-
-f6_comparisons = [
-    compare_models(frequency_cv, FREQUENCY_ADDITIVE_ID, model_id)
-    for model_id in f6_ids.values()
-]
-passed = [row["candidate"] for row in f6_comparisons if row["passes_b08"]]
-f6_id = FREQUENCY_ADDITIVE_ID
-if len(passed) == 2:
-    combination_id = "F6_I1-I2_product-x-age-value"
-    frequency_cv[combination_id] = cross_validate_candidate(
-        interaction_candidate(combination_id, list(interaction_features.values()))
-    )
-    combination_rows = [
-        compare_models(frequency_cv, model_id, combination_id) for model_id in passed
-    ]
-    f6_comparisons += combination_rows
-    if all(row["passes_b08"] for row in combination_rows):
-        f6_id, f6_reason = combination_id, "kombinasjonen består B-08 mot begge"
-    else:
-        better, worse = sorted(
-            passed, key=lambda m: pooled_oof_deviance(frequency_cv[m])
-        )
-        pair_within = compare_models(frequency_cv, better, worse, "forenkling")[
-            "passes_1se"
-        ]
-        f6_id = f6_ids["I1"] if pair_within else better
-        f6_reason = "kombinasjonen består ikke B-08 mot begge; " + (
-            "I1 foretrekkes innen parets 1 SE" if pair_within else "lavest deviance"
-        )
-elif len(passed) == 1:
-    f6_id, f6_reason = passed[0], "eneste interaksjon som består B-08"
-else:
-    f6_reason = "ingen interaksjon består B-08; den additive modellen beholdes"
-f6_comparisons = pd.DataFrame(f6_comparisons)
-report_near_misses(f6_comparisons)
-print(f"Valgt etter 3.7: {f6_id} ({f6_reason})")
-
-
-def slope_summary(model_id):
-    """COMP_N-helninger: snitt over foldene (snitt av fold-SE i parentes)."""
-    result = frequency_cv[model_id]
-    terms = [t for item in result["spec"]["derived"] for t in item.get("terms", [])]
-    return ", ".join(
-        f"{term}: {result['params'].loc[term].mean():+.4f} ({result['param_se'].loc[term].mean():.4f})"
-        for term in terms
-    )
-
-
-# Tabell 2: sammenligninger med kandidatens score og kontrasthelninger
-f6_scores = build_candidate_table(
-    frequency_cv, list(f6_comparisons["candidate"].unique())
-)[["parametere", "oof_deviance", "oof_d2"]].assign(
-    kontrasthelninger=lambda t: [slope_summary(m) for m in t.index]
+f6_result = interactions.select_interactions(
+    cross_validate_candidate,
+    frequency_cv,
+    FREQUENCY_ADDITIVE_ID,
+    additive_spec,
+    support_passes,
+    pooled_oof_deviance,
 )
-display(
-    format_comparison_table(f6_comparisons)
-    .drop(columns=["Retning", "near_miss_3of5"])
-    .join(f6_scores, on="Kandidat")
-    .set_index(["Referanse", "Kandidat"])
-)
+f6_ids, f6_id = f6_result["f6_ids"], f6_result["selected_id"]
+display(f6_result["comparison_table"])  # Tabell 2
 
 # %%
-# Plott: produktvise kurver (foldene tynt, hele train-poolen tykt) mot felles additiv kurve,
-# avgrenset til området begge produkter støtter (hvert produkts p2,5–p97,5)
-additive_curves = fit_full_curves(additive_spec)["curves"]
-plot_curves = []
-for label, model_id in f6_ids.items():
-    feature = interaction_features[label]
-    product_grids = [
-        build_curve_grid(model_frame[model_frame["policy_type"].eq(p)], feature)["x"]
-        for p in INTERACTION_PRODUCTS
-    ]
-    low, high = max(g[0] for g in product_grids), min(g[-1] for g in product_grids)
-    print(f"{feature}: felles støttet område {low:.2f}–{high:.2f}")
-    own = pd.concat(
-        [
-            frequency_cv[model_id]["curves"],
-            fit_full_curves(frequency_cv[model_id]["spec"])["curves"],
-        ]
-    )
-    common = pd.concat(
-        [
-            additive_curves.query("feature == @feature").assign(product=p)
-            for p in INTERACTION_PRODUCTS
-        ]
-    )
-    plot_curves += [
-        part.query("feature == @feature and @low <= x <= @high")
-        for part in (own, common)
-    ]
-if plot_curves:
-    display(
-        plot_fold_curves(
-            pd.concat(plot_curves, ignore_index=True),
-            feature_labels={
-                "driver_age": "Førers alder",
-                "log_vehicle_value": "Log kjøretøyverdi",
-            },
-            title="Produktvise kurver (B-28) mot felles additiv kurve (±2 SE)",
-        )
-    )
+figure = interactions.plot_interaction_curves(
+    frequency_cv, f6_ids, additive_spec, model_frame
+)
+if figure is not None:
+    display(figure)
 
 # %% [markdown]
 # ### 3.8 Fordelingsutfordrer: negativ binomisk NB2 (F7)
@@ -3417,7 +3167,7 @@ rootogram = pd.concat(
             oof_counts[final_design["policy_type"].eq(product)],
             label=product,
         )
-        for product in INTERACTION_PRODUCTS
+        for product in interactions.INTERACTION_PRODUCTS
     ],
     ignore_index=True,
 )
@@ -3662,183 +3412,36 @@ display(
 # %%
 # (1) Uten kansellerte: tren bare på aktive rader i hver eksisterende fold
 # Sensitivitetene gjelder den frosne modellen F5 (B-30)
-assert final_spec is frequency_cv[FREQUENCY_MODEL_ID]["spec"]
-cancelled = model_frame["policy_status"].eq("C")
-print(
-    "Status i train-poolen: "
-    + ", ".join(
-        f"{k} {v}" for k, v in model_frame["policy_status"].value_counts().items()
-    )
-)
-active_folds = [
-    fold
-    | {
-        "train_index": fold["train_index"][
-            ~cancelled.loc[fold["train_index"]].to_numpy()
-        ]
-    }
-    for fold in cv_folds
-]
-no_cancel_result = cross_validate_glm(final_spec, model_frame, active_folds)
-assert no_cancel_result["valid"], no_cancel_result["error"]
-no_cancel_oof = no_cancel_result["oof"]
-
-# Parvis per fold på de samme aktive valideringsradene (gevinst > 0: uten kansellerte bedre)
-active_fold_scores = []
-for fold in cv_folds:
-    rows = fold["val_index"][~cancelled.loc[fold["val_index"]].to_numpy()]
-    part = model_frame.loc[rows]
-    for name, rate in (("hovedmodell", final_oof), ("uten_kansellerte", no_cancel_oof)):
-        active_fold_scores.append(
-            {
-                "model": name,
-                "fold": fold["fold"],
-                "val_weight": part["total_exposure"].sum(),
-                "val_deviance": mean_tweedie_deviance(
-                    part["claim_frequency"],
-                    rate.loc[rows],
-                    sample_weight=part["total_exposure"],
-                    power=1,
-                ),
-            }
-        )
-active_paired = paired_improvement(
-    pd.DataFrame(active_fold_scores), "hovedmodell", "uten_kansellerte"
-)
-print(
-    f"Aktive valideringsrader, uten kansellerte mot hovedmodell: poolet gevinst "
-    f"{active_paired['pooled_forbedring']:.6f}, snitt {active_paired['snitt_forbedring']:.6f}, "
-    f"SE {active_paired['standardfeil']:.6f}, bedre i {active_paired['folder_med_forbedring']}/5 folder"
-)
-
-# Relativitetsendring: samme spesifikasjon på aktive rader i hele train-poolen
-active_fit = fit_glm(final_spec, final_design.loc[~cancelled])
-linear_effects = [p for p in final_fit.params.index if not p.startswith("cr(")]
-log_change = (active_fit.params - final_fit.params).loc[linear_effects]
-changed = log_change.drop("Intercept").abs().sort_values(ascending=False).head(3)
-# Nivå måles som eksponeringsvektet prediksjonsratio, ikke intercept: spline-basisen
-# (cr) bærer også nivå, så interceptet alene er ikke tolkbart
-exposure = final_design["total_exposure"]
-level_ratio = np.average(
-    active_fit.predict(final_design), weights=exposure
-) / np.average(final_fit.predict(final_design), weights=exposure)
-print(
-    f"Nivå uten kansellerte (in-sample, alle rader): ×{level_ratio:.3f}. Største "
-    "relativitetsendringer: "
-    + "; ".join(
-        f"{p} ×{np.exp(log_change[p]):.3f} ({abs(log_change[p]) / final_fit.bse[p]:.1f} cluster-SE)"
-        for p in changed.index
-    )
-)
 display(
-    summarize_prediction_subsets(
+    sensitivities.test_without_cancelled(
+        frequency_cv,
+        FREQUENCY_MODEL_ID,
+        final_spec,
         model_frame,
-        {"hovedmodell": final_oof, "uten_kansellerte": no_cancel_oof},
-        {
-            "aktive": ~cancelled,
-            "kansellerte": cancelled,
-            "alle": cancelled | ~cancelled,
-        },
+        cv_folds,
+        final_design,
+        final_fit,
+        final_oof,
+        cross_validate_glm,
+        fit_glm,
+        paired_improvement,
     )
-    .assign(prediksjon_ratio=lambda t: t["AE_hovedmodell"] / t["AE_uten_kansellerte"])
-    .round(4)
 )
 
 # %%
 # (2) Fri eksponeringskoeffisient: antall med offset log(e) + δ·log(e), cluster-KI
-exposure_design = final_design.assign(
-    log_exposure=np.log(final_design["total_exposure"])
+sensitivities.test_free_exposure_coefficient(
+    final_spec, final_design, final_fit, cluster_groups
 )
-free_exposure_fit = smf.glm(
-    "property_claims ~" + final_spec["formula"].split("~")[1] + " + log_exposure",
-    data=exposure_design,
-    family=sm.families.Poisson(link=LOG_LINK),
-    offset=exposure_design["log_exposure"],
-).fit(cov_type="cluster", cov_kwds={"groups": cluster_groups})
-delta = free_exposure_fit.params["log_exposure"]
-delta_low, delta_high = free_exposure_fit.conf_int().loc["log_exposure"]
-relativity_shift = (
-    (free_exposure_fit.params.drop("log_exposure") - final_fit.params)
-    .loc[linear_effects]
-    .drop("Intercept")
-)
-print(
-    f"δ = {delta:.3f} (95 % cluster-KI {delta_low:.3f} til {delta_high:.3f}); "
-    f"total eksponeringskoeffisient 1+δ = {1 + delta:.3f}. "
-    f"Andel poliseår med e < 1: {final_design['total_exposure'].lt(1).mean():.1%}. "
-    f"In-sample deviance-endring (antallsskala) {final_fit.deviance - free_exposure_fit.deviance:.1f}. "
-    f"Største relativitetsendring: {relativity_shift.abs().idxmax()} "
-    f"×{np.exp(relativity_shift[relativity_shift.abs().idxmax()]):.3f}"
-)
-del exposure_design, free_exposure_fit, active_fit
 
 # %%
 # (4) Kjøreerfaring i stedet for alder i den frosne modellen F5
-experience_ids = []
-for form in CONTINUOUS_FORMS:
-    forms = {
-        column: current
-        for column, current in final_spec["forms"].items()
-        if column != "driver_age"
-    } | {"driving_experience_years": form}
-    model_id = f"S4_exp-{FORM_LABELS[form]}"
-    frequency_cv[model_id] = cross_validate_candidate(
-        build_frequency_candidate(
-            model_id,
-            "S4",
-            [
-                "experience" if b == "driver" else b
-                for b in final_spec["feature_blocks"]
-            ],
-            forms=forms,
-            parent_id=FREQUENCY_MODEL_ID,
-        )
-    )
-    experience_ids.append(model_id)
-
-experience_comparisons = pd.DataFrame(
-    [
-        compare_models(frequency_cv, FREQUENCY_MODEL_ID, model_id)
-        for model_id in experience_ids
-    ]
+experience_table, experience_figure = sensitivities.test_experience_vs_age(
+    frequency_cv, FREQUENCY_MODEL_ID, final_spec, model_frame, cross_validate_candidate
 )
-report_near_misses(experience_comparisons)
-display(
-    format_comparison_table(experience_comparisons)
-    .drop(columns=["Retning", "Innenfor_1SE", "Bestar_B08", "near_miss_3of5"])
-    .join(
-        build_candidate_table(frequency_cv, experience_ids)[
-            ["former", "parametere", "oof_deviance", "oof_d2"]
-        ],
-        on="Kandidat",
-    )
-    .set_index(["Referanse", "Kandidat"])
-)
-
+display(experience_table)
 # Plott: erfaringskurver (folder og hele train-poolen) ved siden av alderskurven i F5
-display(
-    plot_fold_curves(
-        pd.concat(
-            [frequency_cv[m]["curves"] for m in experience_ids]
-            + [
-                fit_full_curves(frequency_cv[m]["spec"])["curves"]
-                for m in experience_ids
-            ]
-            + [
-                frequency_cv[FREQUENCY_MODEL_ID]["curves"],
-                fit_full_curves(final_spec)["curves"],
-            ],
-            ignore_index=True,
-        ).query("feature in ['driving_experience_years', 'driver_age']"),
-        features=["driving_experience_years", "driver_age"],
-        support_frame=model_frame,
-        feature_labels={
-            "driving_experience_years": "Kjøreerfaring (år)",
-            "driver_age": "Førers alder (F5)",
-        },
-        title="Sensitivitet: kjøreerfaring (lineær/df3/df4) mot alder i F5 (±2 SE)",
-    )
-)
+display(experience_figure)
 
 # %% [markdown]
 # **(5) Skadetelling / pukkelen (B-03).** 1,5 % av poliseårene har minst fire
@@ -3880,305 +3483,27 @@ display(
 # %%
 # (5) Skadetelling / pukkelen (B-03). SENSITIVITET: F5 holdes fast (B-30);
 # bare responsen byttes i kopier av spesifikasjonen, og ingen modell endres.
-import matplotlib.pyplot as plt
-
-from src.own_damage_descriptives import AXIS, GRIDLINE, SURFACE
-from src.phase_2.frequency_plots import _MODEL_COLORS, _style_axes
-
-RESPONSE_LABELS = {
-    "main": "fullt antall",
-    "cap3": "kappet ved 3",
-    "claimant": "skade ja/nei",
-}
-RATE_COLUMNS = {
-    "main": "claim_frequency",
-    "cap3": "claim_frequency_cap3",
-    "claimant": "claim_frequency_claimant",
-}
-capped_claims = model_frame["property_claims"].clip(upper=3)
-claimant = model_frame["property_claims"].gt(0).astype(float)
-count_frame = model_frame.assign(
-    claims_cap3=capped_claims,
-    claim_frequency_cap3=capped_claims / model_frame["total_exposure"],
-    claim_frequency_claimant=claimant / model_frame["total_exposure"],
-)
-
-
-def with_response(spec, name):
-    """Kopi av ``spec`` med respons ``name``; høyresiden (F5) er uendret."""
-    if name == "main":
-        return spec
-    y = RATE_COLUMNS[name]
-    return spec | {
-        "name": f"{spec['name']}_{name}",
-        "model_id": f"{spec['model_id']}_{name}",
-        "y": y,
-        "formula": f"{y} ~" + spec["formula"].split("~")[1],
-    }
-
-
-# --- In-sample relativiteter med cluster-KI på hele train-poolen ---
-response_design = final_design.assign(
-    **{column: count_frame[column] for column in RATE_COLUMNS.values()}
-)
-count_fits = {
-    name: fit_glm(
-        with_response(final_spec, name), response_design, cluster_groups=cluster_groups
-    )
-    for name in RATE_COLUMNS
-}
-assert np.allclose(count_fits["main"].params, final_fit.params, rtol=1e-8)
-
-
-def response_effects(name):
-    """Relativiteter (uten basisnivåer) og alder ved gridendene mot referansen, med cluster-KI."""
-    spec, fit = with_response(final_spec, name), count_fits[name]
-    table = build_effect_table(
-        build_relativity_table(spec, fit),
-        linear_scales={"log_vehicle_value": (np.log(1.1), "+10 % kjøretøyverdi")},
-    ).dropna(subset=["standardfeil"])
-    table.index = [
-        change if variable == "log_vehicle_value" else f"{variable} {level}"
-        for (variable, level), change in zip(table.index, table["endring"])
-    ]
-    # Alder som i 3.10: deltametode med uskalert cluster-kovarians (B-23)
-    view = SimpleNamespace(
-        model=fit.model,
-        params=fit.params,
-        cov_params=fit.cov_params,
-        pearson_chi2=1.0,
-        df_resid=1.0,
-        scale=1.0,
-    )
-    ends = (
-        frequency_curve_hook(
-            spec, "full", view, response_design, response_design, final_state
-        )["curves"]
-        .query("feature == 'driver_age'")
-        .sort_values("x")
-        .iloc[[0, -1]]
-    )
-    reference = CURVE_GRIDS["driver_age"]["reference"]
-    ages = pd.DataFrame(
-        {
-            "koeffisient": np.log(ends["relative"].to_numpy()),
-            "standardfeil": ends["se_log"].to_numpy(),
-        },
-        index=[f"alder {x:.0f} mot {reference:.0f} år" for x in ends["x"]],
-    )
-    ages["relativitet"] = np.exp(ages["koeffisient"])
-    ages["ki_lav"] = np.exp(ages["koeffisient"] - 1.96 * ages["standardfeil"])
-    ages["ki_høy"] = np.exp(ages["koeffisient"] + 1.96 * ages["standardfeil"])
-    columns = ["koeffisient", "standardfeil", "relativitet", "ki_lav", "ki_høy"]
-    return pd.concat([table[columns], ages[columns]])
-
-
-count_effects = {name: response_effects(name) for name in RATE_COLUMNS}
-main_effects = count_effects["main"]
-# Kontroll mot 3.10: samme relativiteter for fullt antall
-assert np.allclose(
-    main_effects.loc["policy_type COMP_N", "relativitet"],
-    effect_table.loc[("policy_type", "COMP_N"), "relativitet"],
-)
-print(
-    "In-sample relativiteter, "
-    + "; ".join(
-        f"{RESPONSE_LABELS[name]}: COMP_N ×{effects.loc['policy_type COMP_N', 'relativitet']:.3f}, "
-        f"P ×{effects.loc['business_type P', 'relativitet']:.3f}"
-        for name, effects in count_effects.items()
+display(
+    sensitivities.test_claim_count_sensitivity(
+        FREQUENCY_MODEL_ID,
+        model_frame,
+        final_spec,
+        final_design,
+        final_fit,
+        final_oof,
+        fit_glm,
+        cluster_groups,
+        cross_validate_glm,
+        cv_folds,
+        time_fold,
+        time_val,
+        time_predictions,
+        without_year,
+        effect_table,
+        final_state,
+        paired_improvement,
     )
 )
-for name in ["cap3", "claimant"]:
-    effects = count_effects[name]
-    # Skift i koeffisient målt i hovedmodellens cluster-SE; SE-forhold mot hovedmodellen
-    shift = (effects["koeffisient"] - main_effects["koeffisient"]) / main_effects[
-        "standardfeil"
-    ]
-    se_ratio = effects["standardfeil"] / main_effects["standardfeil"]
-    print(
-        f"{RESPONSE_LABELS[name]} mot fullt antall: største skift "
-        + "; ".join(
-            f"{label} ×{effects.loc[label, 'relativitet']:.3f} ({shift[label]:+.1f} SE)"
-            for label in shift.abs().sort_values(ascending=False).index[:3]
-        )
-        + ". Største endring i cluster-SE: "
-        + "; ".join(
-            f"{label} ×{se_ratio[label]:.2f}"
-            for label in np.log(se_ratio).abs().sort_values(ascending=False).index[:3]
-        )
-    )
-
-# Plott 2: punkt + 95 % cluster-KI per relativitet, én farge per respons
-labels = main_effects.index
-fig, ax = plt.subplots(figsize=(7.5, 0.42 * len(labels) + 1.4), facecolor=SURFACE)
-positions = np.arange(len(labels))
-ax.axvline(1, color=AXIS, linewidth=1)
-for offset, name, color in zip([-0.22, 0.0, 0.22], RATE_COLUMNS, _MODEL_COLORS):
-    effects = count_effects[name].loc[labels]
-    ax.errorbar(
-        effects["relativitet"],
-        positions + offset,
-        xerr=[
-            effects["relativitet"] - effects["ki_lav"],
-            effects["ki_høy"] - effects["relativitet"],
-        ],
-        fmt="o",
-        markersize=4,
-        capsize=2,
-        linewidth=1,
-        color=color,
-        label=RESPONSE_LABELS[name],
-    )
-ax.set_xscale("log")
-ticks = [0.8, 1, 1.25, 1.5, 2, 3, 4]
-ax.set_xticks(ticks, [f"{tick:g}".replace(".", ",") for tick in ticks])
-ax.minorticks_off()
-ax.set_yticks(positions, labels)
-ax.invert_yaxis()
-_style_axes(
-    ax,
-    f"Sensitivitet: relativiteter i {FREQUENCY_MODEL_ID} med tre skadetellinger",
-    "",
-    "Relativitet (log-skala), 95 % cluster-KI",
-)
-ax.yaxis.grid(False)
-ax.xaxis.grid(True, color=GRIDLINE, linewidth=0.8)
-ax.legend(frameon=False, fontsize=8, loc="lower right")
-fig.tight_layout()
-plt.close(fig)
-display(fig)
-
-
-# --- Rangering: gruppe-CV og tidsfold med nivå rekalibrert i treningsfolden ---
-def calibration_hook(spec, fold_name, result, train_design, val_design, derived_state):
-    """Faktorer i treningsfolden: faktisk antall (fullt og kappet) / forventet antall."""
-    expected = (result.predict(train_design) * train_design["total_exposure"]).sum()
-    return {
-        "calibration": pd.DataFrame(
-            {
-                "fold": [fold_name],
-                "to_main": [train_design["property_claims"].sum() / expected],
-                "to_cap3": [train_design["claims_cap3"].sum() / expected],
-            }
-        )
-    }
-
-
-def rescaled_predictions(result, folds, target):
-    """Valideringsrater skalert med faktoren fra treningsfolden til respons ``target``."""
-    fold_of_row = pd.concat(
-        [pd.Series(fold["fold"], index=fold["val_index"]) for fold in folds]
-    )
-    factors = result["calibration"].set_index("fold")[f"to_{target}"]
-    return result["oof"].loc[fold_of_row.index] * fold_of_row.map(factors)
-
-
-def ranking_comparison(results, folds, baseline, candidate, target):
-    """Parvis gevinst (basis − kandidat) på respons ``target``; > 0 betyr kandidat bedre."""
-    rate = RATE_COLUMNS[target]
-    predictions = {
-        name: rescaled_predictions(results[name], folds, target)
-        for name in (baseline, candidate)
-    }
-    rows = predictions[baseline].index
-    cluster = paired_deviance_gain(
-        count_frame.loc[rows, rate],
-        count_frame.loc[rows, "total_exposure"],
-        predictions[baseline],
-        predictions[candidate].loc[rows],
-        count_frame.loc[rows, "insured_id"],
-    )
-    row = {
-        "baseline": baseline,
-        "candidate": candidate,
-        "target": target,
-        "pooled_gain": cluster["gevinst"],
-        "se_cluster": cluster["SE_cluster"],
-        "z_cluster": cluster["z"],
-    }
-    if len(folds) > 1:  # fold-SE og folder bedre, som paired_improvement i (1)
-        fold_scores = [
-            {
-                "model": name,
-                "fold": fold["fold"],
-                "val_weight": part["total_exposure"].sum(),
-                "val_deviance": mean_tweedie_deviance(
-                    part[rate],
-                    predictions[name].loc[part.index],
-                    sample_weight=part["total_exposure"],
-                    power=1,
-                ),
-            }
-            for fold in folds
-            for part in [count_frame.loc[fold["val_index"]]]
-            for name in predictions
-        ]
-        paired = paired_improvement(pd.DataFrame(fold_scores), baseline, candidate)
-        assert np.isclose(paired["pooled_forbedring"], cluster["gevinst"], rtol=1e-6)
-        row |= {
-            "mean_gain": paired["snitt_forbedring"],
-            "se_gain": paired["standardfeil"],
-            "folds_improved": paired["folder_med_forbedring"],
-            "near_miss_3of5": bool(
-                paired["pooled_forbedring"] > 0
-                and paired["snitt_forbedring"] > paired["standardfeil"]
-                and paired["folder_med_forbedring"] == 3
-            ),
-        }
-    return row
-
-
-time_spec = without_year(FREQUENCY_MODEL_ID)
-count_cv, count_time = {}, {}
-for name in RATE_COLUMNS:
-    count_cv[name] = cross_validate_glm(
-        with_response(final_spec, name), count_frame, cv_folds, calibration_hook
-    )
-    count_time[name] = cross_validate_glm(
-        with_response(time_spec, name), count_frame, time_fold, calibration_hook
-    )
-    for result in (count_cv[name], count_time[name]):
-        assert result["valid"], result["error"]
-# Kontroller: fullt antall gjenskaper hovedstigen, og Poisson-balansen gir faktor 1
-assert np.allclose(count_cv["main"]["oof"], final_oof, rtol=1e-8)
-assert np.allclose(
-    count_time["main"]["oof"].loc[time_val.index],
-    time_predictions[FREQUENCY_MODEL_ID],
-    rtol=1e-8,
-)
-assert np.allclose(count_cv["main"]["calibration"]["to_main"], 1, atol=1e-6)
-print(
-    "Rekalibreringsfaktor til fullt antall (gruppefolder; tidsfold): "
-    + "; ".join(
-        f"{RESPONSE_LABELS[name]} {count_cv[name]['calibration']['to_main'].min():.3f}–"
-        f"{count_cv[name]['calibration']['to_main'].max():.3f}; "
-        f"{count_time[name]['calibration']['to_main'].iloc[0]:.3f}"
-        for name in ["cap3", "claimant"]
-    )
-)
-
-COUNT_COMPARISONS = [
-    ("main", "cap3", "main"),
-    ("main", "claimant", "main"),
-    ("cap3", "main", "cap3"),  # motsatt retning: hovedmodellen på kappet antall
-]
-group_rankings = pd.DataFrame(
-    [ranking_comparison(count_cv, cv_folds, *c) for c in COUNT_COMPARISONS]
-)
-time_rankings = pd.DataFrame(
-    [ranking_comparison(count_time, time_fold, *c) for c in COUNT_COMPARISONS]
-)
-report_near_misses(group_rankings)
-for group, in_time in zip(group_rankings.itertuples(), time_rankings.itertuples()):
-    print(
-        f"{RESPONSE_LABELS[group.candidate]} mot {RESPONSE_LABELS[group.baseline]}, "
-        f"scoret på {RESPONSE_LABELS[group.target]} (gevinst > 0: kandidat bedre). "
-        f"Gruppe-CV: poolet {group.pooled_gain:.6f}, snitt {group.mean_gain:.6f}, "
-        f"fold-SE {group.se_gain:.6f}, cluster-SE {group.se_cluster:.6f} "
-        f"(z {group.z_cluster:+.1f}), bedre i {group.folds_improved}/5 folder. "
-        f"Tidsfold 2022→2023: {in_time.pooled_gain:.6f}, cluster-SE "
-        f"{in_time.se_cluster:.6f} (z {in_time.z_cluster:+.1f})"
-    )
 
 # %% [markdown]
 # ### 3.12 Oppsummering fase 1
