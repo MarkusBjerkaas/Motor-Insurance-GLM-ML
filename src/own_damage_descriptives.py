@@ -738,6 +738,75 @@ def build_categorical_association(frame, columns=CATEGORICAL_VARS):
     return matrix.round(3)
 
 
+def _correlation_ratio(frame, cat_col, num_col, weight_col=EXPOSURE_COL):
+    """Eksponeringsvektet korrelasjonsforhold eta = sqrt(SS_between / SS_total).
+
+    Rader der kategori, numerisk verdi eller vekt er manglende droppes parvis
+    (kun for dette paret). Returnerer (eta, antall_droppede_rader).
+    """
+    subset = frame[[cat_col, num_col, weight_col]].dropna().copy()
+    dropped = len(frame) - len(subset)
+    weight = subset[weight_col].astype(float)
+    value = subset[num_col].astype(float)
+    total_mean = np.average(value, weights=weight)
+    ss_total = np.sum(weight * (value - total_mean) ** 2)
+
+    subset["_weighted_value"] = weight * value
+    group_weight = subset.groupby(cat_col, observed=True)[weight_col].sum()
+    group_mean = (
+        subset.groupby(cat_col, observed=True)["_weighted_value"].sum() / group_weight
+    )
+    ss_between = np.sum(group_weight * (group_mean - total_mean) ** 2)
+
+    eta = np.sqrt(ss_between / ss_total) if ss_total > 0 else np.nan
+    return float(eta), dropped
+
+
+def build_categorical_numeric_association(
+    frame, cat_columns=CATEGORICAL_VARS, num_columns=NUMERIC_VARS
+):
+    """Eksponeringsvektet korrelasjonsforhold (eta) mellom kategoriske og numeriske
+    prediktorer, 0-1. Kategoriske variabler som rader, numeriske som kolonner.
+
+    Inneholder en innebygd sanity check: for det første kategoriske/numeriske
+    paret verifiseres eta² mot R² fra en vektet OLS (WLS) av den numeriske
+    variabelen på kategori-dummyer — de to skal være matematisk identiske.
+    """
+    matrix = pd.DataFrame(index=cat_columns, columns=num_columns, dtype=float)
+    for cat in cat_columns:
+        for num in num_columns:
+            eta, dropped = _correlation_ratio(frame, cat, num)
+            matrix.loc[cat, num] = eta
+            if dropped:
+                print(f"{cat} × {num}: droppet {dropped} rader (manglende verdier)")
+
+    # Sanity check (kjører alltid): eta² for ett stabilt par skal matche WLS R².
+    check_cat, check_num = cat_columns[0], num_columns[0]
+    eta_check, _ = _correlation_ratio(frame, check_cat, check_num)
+    check_data = frame[[check_cat, check_num, EXPOSURE_COL]].dropna()
+    wls_fit = smf.wls(
+        f"{check_num} ~ C({check_cat})",
+        data=check_data,
+        weights=check_data[EXPOSURE_COL],
+    ).fit()
+    assert np.isclose(eta_check**2, wls_fit.rsquared, rtol=1e-6), (
+        f"eta² ({eta_check**2:.6f}) matcher ikke WLS R² ({wls_fit.rsquared:.6f}) "
+        f"for {check_cat} × {check_num}."
+    )
+    return matrix.round(3)
+
+
+def report_high_association_pairs(association_matrix, threshold=0.3):
+    """Kategorisk/numerisk-par med eta over `threshold`, sortert synkende."""
+    pairs = association_matrix.stack().rename("eta").reset_index()
+    pairs.columns = ["kategorisk", "numerisk", "eta"]
+    return (
+        pairs.loc[pairs["eta"].gt(threshold)]
+        .sort_values("eta", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Plot: felles stilhjelpere
 # ---------------------------------------------------------------------------
@@ -1415,6 +1484,18 @@ def plot_categorical_association_heatmap(cramers_v_matrix):
         1,
         "Assosiasjon mellom kategoriske prediktorer (Cramér's V)",
         "Cramér's V",
+    )
+
+
+def plot_categorical_numeric_association_heatmap(correlation_ratio_matrix):
+    """Eksponeringsvektet korrelasjonsforhold (eta) mellom kategoriske og numeriske prediktorer."""
+    return _heatmap(
+        correlation_ratio_matrix,
+        SEQUENTIAL_BLUE,
+        0,
+        1,
+        "Assosiasjon mellom kategoriske og numeriske prediktorer (η)",
+        "η",
     )
 
 

@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: MotorForsikring (3.12.x)
+#     display_name: 'defaultInterpreterPath: 3.12.14.final.0'
 #     language: python
 #     name: python3
 # ---
@@ -44,6 +44,7 @@ from src.own_damage_descriptives import (
     build_brand_distribution,
     build_brand_one_way,
     build_categorical_association,
+    build_categorical_numeric_association,
     build_categorical_one_way,
     build_cc_scope_evidence,
     build_claim_count_distribution,
@@ -60,6 +61,7 @@ from src.own_damage_descriptives import (
     plot_brand_distribution,
     plot_brand_one_way,
     plot_categorical_association_heatmap,
+    plot_categorical_numeric_association_heatmap,
     plot_categorical_predictor_bars,
     plot_claim_count_distribution,
     plot_missingness_summary,
@@ -71,6 +73,7 @@ from src.own_damage_descriptives import (
     plot_pure_premium_distribution,
     plot_severity_distribution,
     plot_year_trend,
+    report_high_association_pairs,
 )
 from src.model_data import (
     BRAND_MIN_EXPOSURE,
@@ -865,8 +868,9 @@ display(plot_brand_one_way(brand_one_way, train_pool))
 # ## 22. Samvariasjon blant prediktorer
 #
 # Relevant før GLM: sterkt korrelerte/assosierte prediktorer gir ustabile
-# koeffisienter. Pearson-korrelasjon for de valgte numeriske prediktorene og
-# Cramér's V (bias-korrigert) for kategoriske. `vehicle_age` og
+# koeffisienter. Pearson-korrelasjon for de valgte numeriske prediktorene,
+# Cramér's V (bias-korrigert) for kategoriske, og eksponeringsvektet
+# korrelasjonsforhold (η) for kategorisk-numeriske par. `vehicle_age` og
 # `age_driving_licence` er bevisst utelatt fra modellprediktor-listene.
 
 # %%
@@ -878,6 +882,12 @@ display(plot_numeric_correlation_heatmap(correlation_matrix))
 association_matrix = build_categorical_association(train_pool)
 display(association_matrix)
 display(plot_categorical_association_heatmap(association_matrix))
+
+# %%
+correlation_ratio_matrix = build_categorical_numeric_association(train_pool)
+display(correlation_ratio_matrix)
+display(plot_categorical_numeric_association_heatmap(correlation_ratio_matrix))
+display(report_high_association_pairs(correlation_ratio_matrix, threshold=0.3))
 
 # %%
 display(
