@@ -76,6 +76,7 @@ from patsy import PatsyError
 from sklearn.metrics import mean_tweedie_deviance
 from sklearn.model_selection import GroupKFold
 
+from src import abess_diagnostics
 from src.glm_core import apply_derived_columns, check_fold_fit, prepare_fold_frames
 from src.glm_diagnostics import (
     build_data_overview,
@@ -3504,6 +3505,165 @@ display(
         paired_improvement,
     )
 )
+
+# %% [markdown]
+# ### 3.11A Separat ABESS-diagnostikk for frekvens
+#
+# **Konklusjon:** ABESS gir ikke grunnlag for å endre den låste GLM-en
+# `F5_minus-municipality-performance` (B-30). Begge forhåndslåste ABESS-oppsett
+# har laveste pooled OOF-deviance ved ni grupper og velger samme subset:
+# produkt, år, føreralder, log(bilverdi), drivstoff, urban/rural,
+# betalingsfrekvens, NB/P og poolingsdefinert merke. Ytelse, kommune og seter
+# velges ikke. ABESS taper 0,000531 i pooled OOF Poisson-deviance mot F5
+# (cluster-SE 0,000840). Dette er dermed ikke engang en bedre utviklingsscore,
+# langt mindre dokumentasjon på generaliseringsgevinst.
+#
+# For poliseår $i$ med skadeantall $N_i$, eksponering $e_i$ og et helt sett av
+# valgte variabelblokker $S$ brukes
+#
+# $$
+# N_i \sim \operatorname{Poisson}(e_i\lambda_i),
+# \qquad
+# \log(\lambda_i)=\beta_0+X_{i,S}\beta_S.
+# $$
+#
+# ABESS søker over hele blokker $S$: alle dummyer for én kategori og alle
+# basiskolonner i én spline hører sammen. Produkt og år er obligatoriske;
+# interseptet inngår alltid, men er ikke en selekterbar gruppe. I ABESS 0.4.11
+# fittes frekvensen som $N_i/e_i$ med `sample_weight=e_i`, som er ekvivalent med
+# Poisson for antall med $\log e_i$ som offset når `alpha=0`.
+#
+# Kandidatrommet er låst til A (lineær ytelse) og B (sentrert naturlig spline,
+# df=3, for ytelse). Begge har sentrert naturlig spline df=3 for føreralder og
+# lineær log(bilverdi). Alle størrelser 2–12 kjøres eksplisitt i hver
+# treningsfold; ABESS-EBIC og intern tilfeldig CV brukes ikke. Imputering og
+# Patsy-basis læres på trening og anvendes på validering.
+#
+# **Forbehold:** Funksjonsformene bygger delvis på tidligere resultater fra de
+# samme fem foldene, og ABESS-størrelsen velges også på dem. OOF-scorene er
+# derfor en utviklingssammenligning med seleksjonsoptimisme, ikke uavhengig
+# evaluering av seleksjonsprosedyren. Foldvis preprocessing fjerner ikke dette
+# forbeholdet. Seleksjonsfrekvens over fem overlappende treningssett er
+# beskrivende stabilitet, ikke sannsynligheten for at en blokk er «riktig».
+# Timingforbeholdet i B-27 gjelder fortsatt: feltene er ikke dokumenterte
+# startverdier for polisene.
+
+# %%
+# Separat resultatobjekt: ABESS endrer aldri frequency_cv eller hovedmodellens ID.
+assert "test" not in frames and set(model_frame["year"]) == set(TRAIN_YEARS)
+frequency_ids_before_abess = tuple(frequency_cv)
+frequency_model_before_abess = FREQUENCY_MODEL_ID
+abess_frequency = abess_diagnostics.run_frequency_abess_diagnostic(
+    frame=model_frame,
+    folds=cv_folds,
+    glm_spec=glm_spec,
+    prepare_design_frame=prepare_design_frame,
+    frequency_target=TARGETS["frequency"],
+    locked_glm_oof=final_oof,
+    locked_glm_name=FREQUENCY_MODEL_ID,
+)
+assert tuple(frequency_cv) == frequency_ids_before_abess
+assert FREQUENCY_MODEL_ID == frequency_model_before_abess
+assert final_oof.equals(frequency_cv[FREQUENCY_MODEL_ID]["oof"])
+assert abess_frequency["oof_predictions"].notna().all().all()
+assert set(abess_frequency["score_curve"]["gruppestørrelse"]) == set(range(2, 13))
+print(
+    "Syntetisk ABESS-kontroll: "
+    f"versjon {abess_frequency['verification']['abess_version']}; "
+    f"maks parameteravvik {abess_frequency['verification']['max_parameter_difference']:.2e}; "
+    f"maks rateprediksjonsavvik {abess_frequency['verification']['max_prediction_difference']:.2e}."
+)
+
+# %% [markdown]
+# **Scorekurven** viser alle 11 gruppestørrelser i hvert oppsett. Positiv
+# `gevinst_mot_låst_glm` betyr at ABESS er bedre enn F5. Cluster-SE er beregnet
+# på `insured_id`, men dekker ikke usikkerheten fra subset- og størrelsesvalget.
+# `enklest_1SE` velger færrest grupper med gjennomsnittlig foldtap mot minimum
+# som ikke overstiger én SE; dette er en heuristikk, ikke en signifikanstest.
+
+# %%
+abess_score_curve = abess_frequency["score_curve"].copy()
+display(
+    abess_score_curve.set_index(["oppsett", "gruppestørrelse"])[
+        [
+            "oof_deviance",
+            "gevinst_mot_låst_glm",
+            "SE_cluster_mot_låst_glm",
+            "z_cluster_mot_låst_glm",
+            "gjennomsnittlige_parametere",
+            "pearson_phi",
+        ]
+    ].round(6)
+)
+
+abess_representatives = abess_frequency["representatives"].copy()
+display(
+    abess_representatives.set_index(["oppsett", "regel"])[
+        [
+            "gruppestørrelse",
+            "oof_deviance",
+            "gevinst_mot_låst_glm",
+            "SE_cluster_mot_låst_glm",
+            "z_cluster_mot_låst_glm",
+            "mean_tap_mot_minimum",
+            "SE_tap_mot_minimum",
+            "gjennomsnittlige_parametere",
+        ]
+    ].round(6)
+)
+
+# %% [markdown]
+# **Foldvise scorer og valgte kovariater.** Hver rad nedenfor er resultatet av
+# en ny subset-seleksjon i den aktuelle treningsfolden. Derfor kan modellen
+# velge ulike blokker i ulike folder selv ved samme gruppestørrelse.
+
+# %%
+abess_selected_keys = abess_representatives[["candidate_key", "oppsett", "regel"]]
+abess_fold_table = abess_frequency["fold_comparisons"].merge(
+    abess_selected_keys, on=["candidate_key", "oppsett"], how="inner"
+)
+display(
+    abess_fold_table.set_index(["oppsett", "regel", "fold"])[
+        ["glm_deviance", "abess_deviance", "gevinst_mot_låst_glm"]
+    ].round(6)
+)
+
+abess_selected_blocks = abess_frequency["selections"].merge(
+    abess_selected_keys, on=["candidate_key", "oppsett"], how="inner"
+)
+display(
+    abess_selected_blocks.set_index(["oppsett", "regel", "fold"])[
+        [
+            "gruppestørrelse",
+            "valgte_blokker",
+            "antall_valgte_grupper",
+            "antall_parametere",
+        ]
+    ]
+)
+display(
+    abess_frequency["selection_frequency"]
+    .set_index(["oppsett", "regel", "blokk"])[
+        ["gruppestørrelse", "valgt_i_folder", "seleksjonsfrekvens"]
+    ]
+    .round(3)
+)
+display(abess_frequency["full_development_selection"].set_index(["oppsett", "regel"]))
+
+# %% [markdown]
+# **Kalibrering.** A/E bruker samme definisjon som fase-1-tabellene:
+# observert dividert på forventet antall, der forventet antall er eksponering
+# ganger predikert frekvens. Pearson-$\hat\phi$ er gjennomsnittet fra ABESS'
+# fem treningsfolder. Tabellen er diagnostikk; den brukes ikke til å oppgradere
+# eller endre F5.
+
+# %%
+with pd.option_context("display.max_rows", 300):
+    display(
+        abess_frequency["calibration"]
+        .set_index(["oppsett", "regel", "segment", "level"])
+        .round(4)
+    )
 
 # %% [markdown]
 # ### 3.12 Oppsummering fase 1
