@@ -463,9 +463,41 @@ Arbeidet skal kunne gjøres uten nye modelleringsvalg underveis. Følg rekkeføl
 | 2026-09-16 | Fase 1, B-07-overstyring (B-30) | Frekvensmodellen settes til F5 i stedet for F6_I1 etter tidsfold med parvis cluster-SE. 3.10–3.11 bygges på F5; NB2 sammenlignes på nytt mot F5. Beslutninger nær terskelen (drivstoff, alder df3/df4, merke, NB2) kontrolleres med cluster-SE. **Til planrevisjonen før fase 2:** vurder parvis cluster-SE på `insured_id` i stedet for fold-SE i B-08, siden fem folder ga et for optimistisk SE for I1. | Fold-SE fra fem folder er selv svært usikker; tidsfolden er den beste tilgjengelige prospektive kontrollen uten å bruke 2024. |
 | 2026-09-16 | Fase 1, omfang i modellvalget | Fase 1 kryssvaliderte 77 spesifikasjoner (74 i valgstigen og 3 sensitiviteter), men bare 16 var datadrevne valg, og 3 endret modellen (alder df3, uten kommunetype og uten ytelse). Ca. 90 % av OOF-gevinsten over F0 kommer fra den forhåndslåste kjernen F1. **Til planrevisjonen før fase 2:** krymp kandidatrommet med formvalg per variabel eller fast df i stedet for fullt rutenett, én reduksjonsrunde i stedet for både ablasjon og trinnvis sletting, og et tak på antall datadrevne valg som låses på forhånd. | Brukeren påpekte at antallet var høyt. Antall kjøringer overdriver optimismen, men designet brukte flere kjøringer enn valgene krevde. Severity har de samme skadene, men mer støy per observasjon, så samme stige vil gi mer seleksjonsoptimisme. |
 | 2026-09-16 | Fase 1, pukkelen i skadeantall (B-03) | Sensitivitet (5) er lagt til i 3.11: F5 med antall kappet ved 3 og med skade ja/nei, med rekalibrert nivå, scoret på fullt antall i gruppe-CV og tidsfold. COMP_N-relativiteten er ×3,66 med fullt antall, ×2,98 kappet og ×2,07 per skadepoliseår; øvrige effekter ≤1 SE (P −1,5 SE). Kappet modell taper på fullt antall (z −2,9 CV, −5,1 tid). B-03 står. Datakilden er sjekket manuelt: `property_claims` teller «material and personal damages» for COMP; tellemåten per hendelse er ikke dokumentert, og beløp gjøres opp etter CICOS-avtalen med forhåndsavtalte beløp. **Til planrevisjonen før fase 2:** vurder todelt modell som andel poliseår med skade × kostnad per skadepoliseår, sjekk om beløpene klumper seg (CICOS), og behold Tweedie som kontroll. | Poliseår med N ≥ 4 har ca. 38 % av skadene. Pukkelen var kjent (B-03), men konsekvensen var ikke kvantifisert før modellering. Fordelingen mellom frekvens og snittskade er usikker; totalkostnaden er det ikke. |
+| 2026-09-17 | Fase 1, separat ABESS-diagnostikk | La til en avgrenset, gruppet ABESS-kontroll i `src/abess_diagnostics.py`, uten endring i `frequency_cv`, kandidat-ID-er eller B-30. To låste oppsett, størrelser 2–12 og samme fem gruppefolder ble evaluert. Begge oppsett velger ni grupper og taper 0,000531 pooled OOF-deviance mot F5 (cluster-SE 0,000840). | Best-subset kan belyse alternative kombinasjoner, men de samme foldene har allerede påvirket funksjonsform og størrelsesvalg. Resultatet er utviklingsdiagnostikk med seleksjonsoptimisme, ikke en ny hovedmodell eller dokumentert generaliseringsgevinst. |
 
 ## Utenfor omfang nå
 GBM og penaliserte GAM, credibility for merke, ekstremverditeori (GPD) utover mean excess-plottet, dispersjonsmodellering (DGLM), interaksjoner utover B-28, ridge/lasso i denne leveransen, den separate laggede historikkmodellen og all evaluering på 2024.
+
+## Separat ABESS-diagnostikk etter fase 1
+
+ABESS er en eksplorativ kontroll av den gjennomførte frekvensprosessen, ikke en
+ny hovedmodell eller et nytt kandidatregister. Den bruker bare train-poolen
+2022–2023, samme fem `insured_id`-gruppefolder, responsen `claim_frequency` og
+eksponeringsvekt som fase 1. I hver treningsfold læres imputasjon og
+Patsy-splinebasis før en separat gruppeseleksjon. Produkt og år er obligatoriske
+blokker; interseptet er alltid med, men teller ikke som en gruppe.
+
+Kandidatrommet er låst til to additive oppsett med føreralder som sentrert
+naturlig spline (df=3), lineær log(bilverdi), og enten lineær ytelse (A) eller
+sentrert naturlig spline for ytelse (df=3, B). De ti øvrige valgbare blokkene
+er de tidligere fase-1-blokkene, inkludert forkastede kommune-, merke- og
+seteblokker. Det søkes bare over hele Patsy-blokker, aldri enkeltnivåer eller
+splinekolonner. Alle størrelser 2–12 evalueres eksplisitt uten ABESS-EBIC eller
+intern CV. Etter CV beskrives et fit på hele utviklingssettet, men det brukes
+ikke til en ny valideringsscore.
+
+**Resultat (2026-09-17).** Begge oppsett hadde minimum ved ni grupper, og
+1-SE-heuristikken ga samme størrelse. Det diagnostiske subsetet var produkt,
+år, føreralder, log(bilverdi), drivstoff, urban/rural, betalingsfrekvens, NB/P
+og poolingsdefinert merke; ytelse, kommune og seter ble utelatt. A og B er
+derfor identiske i det valgte subsetet. Pooled OOF Poisson-deviance var
+1,121144, som er 0,000531 *dårligere* enn den låste GLM-en
+`F5_minus-municipality-performance` (cluster-SE 0,000840; z = 0,63 for
+GLM minus ABESS). Dette er ikke dokumentasjon på generaliseringsgevinst; både
+funksjonsformene og ABESS-størrelsen er vurdert på de samme overlappende
+foldene som tidligere fase-1-valg. Seleksjonsfrekvenser over fem treninger er
+bare beskrivende stabilitet, og den clusterbaserte usikkerheten dekker ikke
+seleksjonsusikkerheten. Timingforbeholdet i B-27 gjelder uendret.
 
 ## Litteratur (referanseliste i notebookens seksjon 2)
 Gneiting (2011, JASA); Wüthrich & Merz (2023, Springer); Fissler, Lorentzen & Mayer (2023, arXiv:2202.12780); Wüthrich (2023, Eur. Actuar. J., Gini under autokalibrering); Frees, Meyers & Cummings (2011, JASA); Goldburd, Khare, Tevet & Guller (2020, CAS Monograph 5); Ohlsson & Johansson (2010, Springer); Noll, Salzmann & Wüthrich (2018, SSRN 3164764); Delong, Lindholm & Wüthrich (2021, Eur. Actuar. J.); Smyth & Jørgensen (2002, ASTIN Bull.); Jørgensen & de Souza (1994, Scand. Actuar. J.); Denuit, Charpentier & Trufin (2021, IME); Kleiber & Zeileis (2016, Am. Stat.); Cameron & Trivedi (1990, J. Econometrics); Cameron & Miller (2015, J. Human Resources); Roberts et al. (2017, Ecography); Hastie, Tibshirani & Friedman (2009); Harrell (2015); Duan (1983, JASA); Embrechts, Klüppelberg & Mikosch (1997).
