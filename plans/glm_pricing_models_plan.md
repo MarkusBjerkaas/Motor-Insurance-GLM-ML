@@ -1,10 +1,10 @@
 # Plan: GLM-benchmark for egen skade – fase 1–4 i `glm_pricing_models`
 
-## Status etter revurdering 2026-09-16
+## Status etter fase 1 og faktarevisjon 2026-09-17
 
-Leveranse 0 er implementert, og referansemodellene er kjørt. **Denne revisjonen gjelder planen for fase 1; kandidatmodellene er ennå ikke fittet.** Fase 1 nedenfor erstatter den tidligere fremoverseleksjonen. Leveranse 2–4 er fortsatt utkast og revurderes ved faseovergang.
+Leveranse 0 er implementert, referansemodellene er kjørt, og **fase 1 (frekvens) er fullført og låst**. Additiv modell `F5_minus-municipality-performance` (13 parametere) er den endelige frekvensmodellen etter B-07-overstyringen i B-30: den datadrevne utfordreren `F6_I1_product-x-age` besto B-08 i gruppe-CV, men tapte i tidsfolden 2022→2023 og ble derfor forkastet. NB2 slår ikke Poisson (B-23). En separat, avgrenset ABESS-diagnostikk (2026-09-17) er kjørt i tillegg og endrer ikke denne konklusjonen; se «Separat ABESS-diagnostikk etter fase 1» nedenfor. Leveranse 2–4 er fortsatt utkast og revurderes ved faseovergang — **denne revisjonen retter kun faktagrunnlaget i eksisterende tekst og skriver ikke fase 2-planen**.
 
-Brukeren har **avklart og låst** tre beslutninger: prosjektet fortsetter som metodebenchmark med timingforbehold (B-02/B-27); føreralder brukes i hovedstigen og erfaring bare som sensitivitet (B-11); de to avgrensede interaksjonene kan kvalifisere til benchmarken (B-08/B-28). Beslutningsregisteret og seksjon 2.8/2.10 i `glm_pricing_models.py` er samordnet med disse valgene. Det gjenstår ingen åpne brukerbeslutninger før implementering av fase 1.
+Brukeren har **avklart og låst** tre beslutninger: prosjektet fortsetter som metodebenchmark med timingforbehold (B-02/B-27); føreralder brukes i hovedstigen og erfaring bare som sensitivitet (B-11); de to avgrensede interaksjonene kan kvalifisere til benchmarken (B-08/B-28), og i praksis kvalifiserte ingen etter tidsfoldkontrollen (B-30). Beslutningsregisteret og seksjon 2.8/2.10 i `glm_pricing_models.py` er samordnet med disse valgene. Det gjenstår ingen åpne brukerbeslutninger for fase 1. Neste steg er å revurdere og skrive fase 2 (severity)-planen i en egen omgang.
 
 ## Kontekst
 
@@ -31,12 +31,12 @@ Resultatet er en fryst, transparent GLM-benchmark som senere ML-modeller skal sl
 |---|---|---|
 | Kansellerte poliser (C) | 13 % av skadene og 13 % av kostnaden på 5 % av eksponeringen. Frekvens 0,71 mot 0,24. Andel med skade 17,9 % mot 9,8 %. | Beholdes (B-01). Uten dem faller nivået med ca. 9 %, og relativitetene for bonus N (27 % av skadene fra C), kvartalsbetaling og P dempes. |
 | Offset-proporsjonalitet | Fri log(e)-koeffisient: 1,10 (KI 1,01–1,19) med alle rader, 1,53 uten C | Fast offset brukes. A/E per eksponeringsbøtte er påvirket av utfallet og tolkes forsiktig. |
-| Pukkel i skadeantall | N=3: 246, N=4: 431, N=5: 339, mest i COMP_N. Median kostnad per skade faller fra 690 til 495 EUR. | Tellemodellen beholdes, med rootogram og A/E per antall (B-03). Tweedie er en robust kontroll. |
+| Pukkel i skadeantall | N=3: 245, N=4: 418, N=5: 335, mest i COMP_N. Median kostnad per skade faller fra ca. 692 til 497 EUR. | Tellemodellen beholdes, med rootogram og A/E per antall (B-03). Tweedie er en robust kontroll. |
 | Motsatt retning for frekvens og severity | COMP_N: frekvens 0,69 / severity 680. COMP_E: 0,18 / 1 020. | Et konkret argument for å teste den todelte modellen mot Tweedie i fase 3. |
 | Tyngde i halen | Topp 1 % av skadeårene står for 8,5 % av kostnaden. Kostnad over u på skadeårsnivå: 7,5 % (5 000), 3,8 % (7 500), 2,1 % (10 000). Høyeste skade/bilverdi er 0,92, og bare 8 skader ligger over 0,5. | Moderat og avgrenset hale uten tydelig totalskadeklynge. Storskadeanalysen er beslutningsstøtte, ikke en forhåndsbestemt løsning. |
 | Enkeltskader kan identifiseres | 67 % av skadeårene har N=1, men de utgjør bare 38 % av skadene | Terskelen vurderes på skadeår med N=1. Kappingen gjøres på snittskaden. |
-| Bonus-balanse | Eksponering G 36 525, N 763, B 616 | Brede intervaller for N og B |
-| Manglende verdier i train-poolen | fuel_type 439, vehicle_value/log_vehicle_value 33, age_driving_licence/driving_experience_years 1, performance_hp_per_tonne 0 | Egen strategi (B-09). De 3 ikke-positive rå ytelsesverdiene i renseloggen gjelder hele datasettet, ikke denne train-poolen. |
+| Bonus-balanse | Eksponering G 35 773, N 745, B 608 | Brede intervaller for N og B |
+| Manglende verdier i train-poolen | fuel_type 438, vehicle_value/log_vehicle_value 33, age_driving_licence/driving_experience_years 1, performance_hp_per_tonne 0 | Egen strategi (B-09). De 3 ikke-positive rå ytelsesverdiene i renseloggen gjelder hele datasettet, ikke denne train-poolen. |
 | Teknisk | patsy feiler på pandas `Int16` og andre nullable dtypes | Designrammen konverteres til float/str før formlene brukes |
 | Nullkostnadsskader | 9 skadeår med incurred ≤ 0,01 | Utelates fra severity (B-15) |
 
@@ -151,7 +151,7 @@ Evidensen under kommer fra `analysis.py` seksjon 12.1 og 16–23, lagrede output
 | Blokk / variabler | Train-funn og faglig begrunnelse | Rolle og koding |
 |---|---|---|
 | Produkt: `policy_type` | Frekvens COMP_E 0,183; COMP_N 0,692. Egenandel og dekning påvirker hvilke skader som meldes. CC er fjernet fra populasjonen (B-29). | Obligatorisk kategorisk kontroll, COMP_E som basis. |
-| Kalender: `year` | Frekvens 0,235 i 2022 mot 0,282 i 2023. Referansemodellen underpredikerer 2023 med omtrent 17 % i tidsfolden. | Obligatorisk kategorisk kontroll i gruppe-CV, basis 2023. Utelates i tidsfolden. Ingen lineær trend eller offset. |
+| Kalender: `year` | Frekvens 0,235 i 2022 mot 0,285 i 2023 (gjeldende populasjon, jf. notebookens 3.0). Referansemodellen (uten årsledd, trent på 2022) underpredikerer 2023-frekvensen med ca. 18 % i tidsfolden (balanse 0,82). | Obligatorisk kategorisk kontroll i gruppe-CV, basis 2023. Utelates i tidsfolden. Ingen lineær trend eller offset. |
 | Fører: `driver_age` | Frekvens i seks kvantilbøtter: 0,267; 0,242; 0,255; 0,251; 0,277; 0,312. Aldersspennet er 18–85, p1/p99 omtrent 27/73. | Kjerne. Lineær, sentrert naturlig spline df=3 eller 4. Ingen antatt monoton effekt; liten støtte for de yngste/eldste. |
 | Verdi: `log_vehicle_value` | Frekvens fra 0,217 i laveste til 0,350 i høyeste kvantilbøtte; ikke helt monoton mellom disse. Signal finnes også i frekvens, ikke bare severity. | Kjerne. Naturlig log av verdi; lineær effekt på logskala mot spline df=3/4 på samme skala. Rå verdi legges ikke til samtidig. |
 | Ytelse: `performance_hp_per_tonne` | Frekvens omtrent 0,236 til 0,329 fra laveste til høyeste bøtte. Korrelasjon med logverdi 0,564. p99 omtrent 150,4, maksimum 318,5 hk/tonn. | Kjerne. `1000 / power_to_weight_ratio`, fordi kilden angir kg/hk. Lineær mot spline df=3/4; ikke ta inn rå forholdstall samtidig. |
@@ -169,7 +169,7 @@ Rå kvantilbøtter er laget med `pd.qcut(..., q=6)` i `build_numeric_one_way`; d
 
 **Utelukk eksplisitt:** `vehicle_age` (uklar/feil semantikk), rå `age_driving_licence`, `policy_status`, `insured_id`, alle samtidige skade- og kostnadsfelt og alle premier som risikoprediktorer. `insured_id` brukes bare til gruppering/clustering. Eksponering brukes til respons, offset/vekt og diagnostikk, ikke som fritt hovedledd. Ingen target encoding, nye empiriske skadegrupper, kjørelengde, eksakt egenandel eller reell kjøretøyalder skal oppfinnes. Disse siste feltene finnes ikke i modellgrunnlaget.
 
-**Manglende data:** B-09 beholdes, med median fra treningsfolden og MISSING for drivstoff. Fuel mangler på 439 rader, logverdi på 33 og erfaring på 1; ytelse mangler ikke i train-poolen. De 33 manglende verdiradene har høy rå frekvens, men er for få til en ny automatisk missing-indikator. Ingen nye numeriske missing-indikatorer i hovedstigen. Rader skal ikke falle bort mellom kandidater.
+**Manglende data:** B-09 beholdes, med median fra treningsfolden og MISSING for drivstoff. Fuel mangler på 438 rader, logverdi på 33 og erfaring på 1; ytelse mangler ikke i train-poolen. De 33 manglende verdiradene har høy rå frekvens, men er for få til en ny automatisk missing-indikator. Ingen nye numeriske missing-indikatorer i hovedstigen. Rader skal ikke falle bort mellom kandidater.
 
 #### 3.2 Modell, basis og lineær kjerne
 
@@ -464,6 +464,7 @@ Arbeidet skal kunne gjøres uten nye modelleringsvalg underveis. Følg rekkeføl
 | 2026-09-16 | Fase 1, omfang i modellvalget | Fase 1 kryssvaliderte 77 spesifikasjoner (74 i valgstigen og 3 sensitiviteter), men bare 16 var datadrevne valg, og 3 endret modellen (alder df3, uten kommunetype og uten ytelse). Ca. 90 % av OOF-gevinsten over F0 kommer fra den forhåndslåste kjernen F1. **Til planrevisjonen før fase 2:** krymp kandidatrommet med formvalg per variabel eller fast df i stedet for fullt rutenett, én reduksjonsrunde i stedet for både ablasjon og trinnvis sletting, og et tak på antall datadrevne valg som låses på forhånd. | Brukeren påpekte at antallet var høyt. Antall kjøringer overdriver optimismen, men designet brukte flere kjøringer enn valgene krevde. Severity har de samme skadene, men mer støy per observasjon, så samme stige vil gi mer seleksjonsoptimisme. |
 | 2026-09-16 | Fase 1, pukkelen i skadeantall (B-03) | Sensitivitet (5) er lagt til i 3.11: F5 med antall kappet ved 3 og med skade ja/nei, med rekalibrert nivå, scoret på fullt antall i gruppe-CV og tidsfold. COMP_N-relativiteten er ×3,66 med fullt antall, ×2,98 kappet og ×2,07 per skadepoliseår; øvrige effekter ≤1 SE (P −1,5 SE). Kappet modell taper på fullt antall (z −2,9 CV, −5,1 tid). B-03 står. Datakilden er sjekket manuelt: `property_claims` teller «material and personal damages» for COMP; tellemåten per hendelse er ikke dokumentert, og beløp gjøres opp etter CICOS-avtalen med forhåndsavtalte beløp. **Til planrevisjonen før fase 2:** vurder todelt modell som andel poliseår med skade × kostnad per skadepoliseår, sjekk om beløpene klumper seg (CICOS), og behold Tweedie som kontroll. | Poliseår med N ≥ 4 har ca. 38 % av skadene. Pukkelen var kjent (B-03), men konsekvensen var ikke kvantifisert før modellering. Fordelingen mellom frekvens og snittskade er usikker; totalkostnaden er det ikke. |
 | 2026-09-17 | Fase 1, separat ABESS-diagnostikk | La til en avgrenset, gruppet ABESS-kontroll i `src/abess_diagnostics.py`, uten endring i `frequency_cv`, kandidat-ID-er eller B-30. To låste oppsett, størrelser 2–12 og samme fem gruppefolder ble evaluert. Begge oppsett velger ni grupper og taper 0,000531 pooled OOF-deviance mot F5 (cluster-SE 0,000840). | Best-subset kan belyse alternative kombinasjoner, men de samme foldene har allerede påvirket funksjonsform og størrelsesvalg. Resultatet er utviklingsdiagnostikk med seleksjonsoptimisme, ikke en ny hovedmodell eller dokumentert generaliseringsgevinst. |
+| 2026-09-17 | Faktarevisjon (korrigering, ingen ny modellering) | **Rettet et fortegnsfeil i raden over og i «Separat ABESS-diagnostikk etter fase 1»:** `gevinst_mot_låst_glm = glm_deviance − abess_deviance` var positiv (0,000531) i den lagrede notebook-tabellen, dvs. F5s deviance (1,121675) er *høyere* enn ABESS' (1,121144) — ABESS har altså marginalt *lavere/bedre* pooled OOF-deviance, ikke «taper» slik forrige versjon skrev. Notebookens egen tekst («Positiv `gevinst_mot_låst_glm` betyr at ABESS er bedre enn F5», glm_pricing_models.py) bekrefter konvensjonen. Konklusjonen endres ikke: 0,63 cluster-SE er langt under B-08s 1-SE-krav, og ABESS bruker ca. 30 parametere mot F5s 13. **Andre rettelser i faktagrunnlaget:** `fuel_type`-mangel 439→438 (to steder); Datafunn-tabellens pukkeltall N=3/4/5 246/431/339→245/418/335 og bonusbalanse G/N/B 36 525/763/616→35 773/745/608 (var pre-B-29/CC-tall, verifisert mot `build_model_frames()` på gjeldende train-pool); seksjon 3.1s årsrad 0,282→0,285 og «17 %»→«18 %» underprediksjon (verifisert mot gjeldende referansemodell-tabell i notebooken, seksjon 2.9). Statusavsnittet øverst er oppdatert til å reflektere at fase 1 faktisk er fullført og låst (B-30). Kansellerte-poliser-raden, COMP_N/COMP_E frekvens/severity-raden (skadevektet, korrekt) og B-30s tidsfoldtall i beslutningsregisteret ble kontrollert og er uendret — de stemte allerede med gjeldende kode/output. **Uavklart:** «Fri log(e)-koeffisient 1,53 uten C» i Datafunn-tabellen kunne ikke reproduseres med en avgrenset kontroll (en enkel spesifikasjon uten F5s kovariater ga 1,25/1,63, ikke direkte sammenlignbart) og er ikke rettet; haletabellens tall (8,5 % topp 1 %, terskelandeler 5 000/7 500/10 000, skade/bilverdi 0,92) finnes ikke igjen i noe kjørt script eller notebook-output og kunne ikke verifiseres — begge bør presiseres eller rekjøres før de brukes i severity-planen. `glm_pricing_models.py` seksjon 3.11A har den samme fortegnsfeilen i markdown-teksten («ABESS taper …») som ble rettet her i planen; notebooken er ikke endret i denne revisjonen. | Brukeren ba om en tall- og konsistensrevisjon av planen før severity-planen skrives; feilen i ABESS-fortegnet var konkret meldt inn og verifisert direkte mot lagret celleoutput i `glm_pricing_models.ipynb`. |
 
 ## Utenfor omfang nå
 GBM og penaliserte GAM, credibility for merke, ekstremverditeori (GPD) utover mean excess-plottet, dispersjonsmodellering (DGLM), interaksjoner utover B-28, ridge/lasso i denne leveransen, den separate laggede historikkmodellen og all evaluering på 2024.
@@ -486,18 +487,23 @@ splinekolonner. Alle størrelser 2–12 evalueres eksplisitt uten ABESS-EBIC ell
 intern CV. Etter CV beskrives et fit på hele utviklingssettet, men det brukes
 ikke til en ny valideringsscore.
 
-**Resultat (2026-09-17).** Begge oppsett hadde minimum ved ni grupper, og
+**Resultat (2026-09-17, rettet 2026-09-17 – se endringslogg).** Begge oppsett hadde minimum ved ni grupper, og
 1-SE-heuristikken ga samme størrelse. Det diagnostiske subsetet var produkt,
 år, føreralder, log(bilverdi), drivstoff, urban/rural, betalingsfrekvens, NB/P
 og poolingsdefinert merke; ytelse, kommune og seter ble utelatt. A og B er
-derfor identiske i det valgte subsetet. Pooled OOF Poisson-deviance var
-1,121144, som er 0,000531 *dårligere* enn den låste GLM-en
-`F5_minus-municipality-performance` (cluster-SE 0,000840; z = 0,63 for
-GLM minus ABESS). Dette er ikke dokumentasjon på generaliseringsgevinst; både
-funksjonsformene og ABESS-størrelsen er vurdert på de samme overlappende
-foldene som tidligere fase-1-valg. Seleksjonsfrekvenser over fem treninger er
-bare beskrivende stabilitet, og den clusterbaserte usikkerheten dekker ikke
-seleksjonsusikkerheten. Timingforbeholdet i B-27 gjelder uendret.
+derfor identiske i det valgte subsetet, med i snitt 30 parametere (mot F5s 13).
+Pooled OOF Poisson-deviance var 1,121144, som er 0,000531 *lavere* (marginalt
+bedre) enn den låste GLM-en `F5_minus-municipality-performance` sin 1,121675
+(cluster-SE 0,000840; z ≈ 0,63, i ABESS' favør). Gevinsten er dermed langt
+under 1-SE-kravet i B-08 og oppnås med mer enn dobbelt så mange parametere, så
+den gir ikke grunnlag for å bytte ut den låste modellen — men den er heller
+ikke et tap for ABESS, slik en tidligere versjon av dette avsnittet feilaktig
+skrev. Dette er uansett ikke dokumentasjon på generaliseringsgevinst for noen
+av modellene; både funksjonsformene og ABESS-størrelsen er vurdert på de
+samme overlappende foldene som tidligere fase-1-valg. Seleksjonsfrekvenser
+over fem treninger er bare beskrivende stabilitet, og den clusterbaserte
+usikkerheten dekker ikke seleksjonsusikkerheten. Timingforbeholdet i B-27
+gjelder uendret.
 
 ## Litteratur (referanseliste i notebookens seksjon 2)
 Gneiting (2011, JASA); Wüthrich & Merz (2023, Springer); Fissler, Lorentzen & Mayer (2023, arXiv:2202.12780); Wüthrich (2023, Eur. Actuar. J., Gini under autokalibrering); Frees, Meyers & Cummings (2011, JASA); Goldburd, Khare, Tevet & Guller (2020, CAS Monograph 5); Ohlsson & Johansson (2010, Springer); Noll, Salzmann & Wüthrich (2018, SSRN 3164764); Delong, Lindholm & Wüthrich (2021, Eur. Actuar. J.); Smyth & Jørgensen (2002, ASTIN Bull.); Jørgensen & de Souza (1994, Scand. Actuar. J.); Denuit, Charpentier & Trufin (2021, IME); Kleiber & Zeileis (2016, Am. Stat.); Cameron & Trivedi (1990, J. Econometrics); Cameron & Miller (2015, J. Human Resources); Roberts et al. (2017, Ecography); Hastie, Tibshirani & Friedman (2009); Harrell (2015); Duan (1983, JASA); Embrechts, Klüppelberg & Mikosch (1997).

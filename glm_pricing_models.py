@@ -3575,95 +3575,65 @@ print(
 )
 
 # %% [markdown]
-# **Scorekurven** viser alle 11 gruppestørrelser i hvert oppsett. Positiv
-# `gevinst_mot_låst_glm` betyr at ABESS er bedre enn F5. Cluster-SE er beregnet
-# på `insured_id`, men dekker ikke usikkerheten fra subset- og størrelsesvalget.
-# `enklest_1SE` velger færrest grupper med gjennomsnittlig foldtap mot minimum
-# som ikke overstiger én SE; dette er en heuristikk, ikke en signifikanstest.
+# **Topp 3 featurekombinasjoner.** CV velger kun to representanter per
+# oppsett (minimum og enklest-1SE), og disse faller ofte sammen på nøyaktig
+# samme subset (se konklusjonen i 3.11A). For å vise de faktisk distinkte
+# kombinasjonene er hele candidate-rutenettet (begge oppsett, alle
+# gruppestørrelser) fittet på hele utviklingssettet, deduplisert på faktisk
+# valgt kombinasjon og rangert på pooled OOF-deviance fra CV-scorekurven.
+# `valgte_blokker` lister eksplisitt hvilke featureblokker som inngår i hver
+# kombinasjon. Positiv `gevinst_mot_låst_glm` betyr at ABESS er bedre enn F5.
+# Cluster-SE er beregnet på `insured_id`, men dekker ikke usikkerheten fra
+# subset- og størrelsesvalget.
 
 # %%
-abess_score_curve = abess_frequency["score_curve"].copy()
-display(
-    abess_score_curve.set_index(["oppsett", "gruppestørrelse"])[
-        [
-            "oof_deviance",
-            "gevinst_mot_låst_glm",
-            "SE_cluster_mot_låst_glm",
-            "z_cluster_mot_låst_glm",
-            "gjennomsnittlige_parametere",
-            "pearson_phi",
-        ]
-    ].round(6)
-)
-
-abess_representatives = abess_frequency["representatives"].copy()
-display(
-    abess_representatives.set_index(["oppsett", "regel"])[
-        [
-            "gruppestørrelse",
-            "oof_deviance",
-            "gevinst_mot_låst_glm",
-            "SE_cluster_mot_låst_glm",
-            "z_cluster_mot_låst_glm",
-            "mean_tap_mot_minimum",
-            "SE_tap_mot_minimum",
-            "gjennomsnittlige_parametere",
-        ]
-    ].round(6)
-)
-
-# %% [markdown]
-# **Foldvise scorer og valgte kovariater.** Hver rad nedenfor er resultatet av
-# en ny subset-seleksjon i den aktuelle treningsfolden. Derfor kan modellen
-# velge ulike blokker i ulike folder selv ved samme gruppestørrelse.
-
-# %%
-abess_selected_keys = abess_representatives[["candidate_key", "oppsett", "regel"]]
-abess_fold_table = abess_frequency["fold_comparisons"].merge(
-    abess_selected_keys, on=["candidate_key", "oppsett"], how="inner"
-)
-display(
-    abess_fold_table.set_index(["oppsett", "regel", "fold"])[
-        ["glm_deviance", "abess_deviance", "gevinst_mot_låst_glm"]
-    ].round(6)
-)
-
-abess_selected_blocks = abess_frequency["selections"].merge(
-    abess_selected_keys, on=["candidate_key", "oppsett"], how="inner"
-)
-display(
-    abess_selected_blocks.set_index(["oppsett", "regel", "fold"])[
-        [
-            "gruppestørrelse",
-            "valgte_blokker",
-            "antall_valgte_grupper",
-            "antall_parametere",
-        ]
-    ]
-)
-display(
-    abess_frequency["selection_frequency"]
-    .set_index(["oppsett", "regel", "blokk"])[
-        ["gruppestørrelse", "valgt_i_folder", "seleksjonsfrekvens"]
-    ]
-    .round(3)
-)
-display(abess_frequency["full_development_selection"].set_index(["oppsett", "regel"]))
-
-# %% [markdown]
-# **Kalibrering.** A/E bruker samme definisjon som fase-1-tabellene:
-# observert dividert på forventet antall, der forventet antall er eksponering
-# ganger predikert frekvens. Pearson-$\hat\phi$ er gjennomsnittet fra ABESS'
-# fem treningsfolder. Tabellen er diagnostikk; den brukes ikke til å oppgradere
-# eller endre F5.
-
-# %%
-with pd.option_context("display.max_rows", 300):
-    display(
-        abess_frequency["calibration"]
-        .set_index(["oppsett", "regel", "segment", "level"])
-        .round(4)
+abess_top_combinations = (
+    abess_frequency["full_development_grid"]
+    .merge(
+        abess_frequency["score_curve"][
+            [
+                "oppsett",
+                "gruppestørrelse",
+                "oof_deviance",
+                "gevinst_mot_låst_glm",
+                "SE_cluster_mot_låst_glm",
+                "z_cluster_mot_låst_glm",
+            ]
+        ],
+        on=["oppsett", "gruppestørrelse"],
     )
+    .drop_duplicates(subset=["valgte_blokker_rå"])
+    .sort_values("oof_deviance")
+    .head(3)
+    .reset_index(drop=True)
+)
+abess_top_combinations.index = abess_top_combinations.index + 1
+abess_top_combinations.index.name = "rangering"
+display(
+    abess_top_combinations[
+        [
+            "oppsett",
+            "gruppestørrelse",
+            "antall_parametere",
+            "valgte_blokker",
+            "oof_deviance",
+            "gevinst_mot_låst_glm",
+            "SE_cluster_mot_låst_glm",
+            "z_cluster_mot_låst_glm",
+        ]
+    ].round(6)
+)
+
+# %% [markdown]
+# **Koeffisienter for beste ABESS-kombinasjon** (rangering 1 over), fittet på
+# hele utviklingssettet med den valgte gruppestørrelsen. ABESS er en
+# rendyrket seleksjonsprosedyre uten standardfeil eller konfidensintervaller,
+# så tabellen viser bare punktestimater på log-skala — i motsetning til F5s
+# cluster-robuste koeffisienttabell til slutt i notebooken.
+
+# %%
+abess_best_combination = abess_top_combinations.iloc[0]
+display(abess_best_combination["koeffisienter"].round(4).to_frame())
 
 # %% [markdown]
 # ### 3.12 Oppsummering fase 1
@@ -3736,6 +3706,42 @@ with pd.option_context("display.max_rows", 300):
 #    - Forslag: formvalg per variabel eller fast df, én reduksjonsrunde og et
 #      tak på antall datadrevne valg som låses på forhånd.
 
+# %% [markdown]
+# ### 3.13 Endelig modell: spesifikasjon og koeffisienter
+#
+# Den låste frekvensmodellen er `F5_minus-municipality-performance` (B-30),
+# fittet på hele train-poolen (fitten `final_fit` fra 3.9). For poliseår $i$
+# med skadeantall $N_i$ og eksponering $e_i$:
+#
+# $$
+# N_i \sim \operatorname{Poisson}(e_i \lambda_i),
+# $$
+#
+# $$
+# \log(\lambda_i) = \beta_0
+# + \beta_{\text{produkt}(i)}
+# + \beta_{\text{år}(i)}
+# + f_{\text{alder}}(\text{alder}_i)
+# + \beta_v \log(\text{verdi}_i)
+# + \beta_{\text{drivstoff}(i)}
+# + \beta_{\text{sirkulasjon}(i)}
+# + \beta_{\text{betaling}(i)}
+# + \beta_{\text{forretning}(i)}.
+# $$
+#
+# $f_{\text{alder}}$ er en sentrert naturlig spline med df=3 for føreralder.
+# `produkt`, `år`, `drivstoff`, `sirkulasjon` (urban/rural), `betaling`
+# (betalingsfrekvens) og `forretning` (forretningstype) er kategoriske
+# blokker med referansenivå fanget i interseptet; log(verdi) er lineær.
+# Modellen har log-link, eksponering som vekt/offset og cluster-robust
+# (sandwich) inferens på `insured_id` — dette dekker gruppert
+# overdispersjon fra flere polisår per kunde, men ikke feilspesifisert
+# funksjonsform. Tabellen under viser statsmodels' fulle `summary()`
+# (koeffisienter, cluster-robuste standardfeil, z/p-verdier og
+# modellmetadata som deviance og frihetsgrader).
+
+# %%
+print(final_fit.summary())
 
 # %% [markdown]
 # ## 7. Beslutningsregister

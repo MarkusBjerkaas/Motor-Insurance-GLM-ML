@@ -274,6 +274,13 @@ def run_frequency_abess_diagnostic(
         representatives,
         prepare_design_frame,
     )
+    full_development_grid = _fit_full_development_grid(
+        frame,
+        specs,
+        list(CANDIDATE_SETUPS),
+        range(len(MANDATORY_BLOCKS), len(BLOCKS) + 1),
+        prepare_design_frame,
+    )
 
     return {
         "verification": verification,
@@ -284,6 +291,7 @@ def run_frequency_abess_diagnostic(
         "selection_frequency": selection_frequency,
         "calibration": calibration,
         "full_development_selection": full_development_selection,
+        "full_development_grid": full_development_grid,
         "oof_predictions": pd.DataFrame(all_oof, index=frame.index),
         "full_designs": {
             setup: {
@@ -726,6 +734,38 @@ def _calibration_tables(
     return pd.concat(tables, ignore_index=True)
 
 
+def _fit_full_development_candidate(
+    frame: pd.DataFrame, design: dict, support_size: int
+) -> dict:
+    """Fit ABESS på hele utviklingssettet for én (oppsett, gruppestørrelse)."""
+    estimator = _fit_abess(
+        design["matrix"],
+        frame[RESPONSE_COLUMN].to_numpy(dtype=float),
+        frame[EXPOSURE_COLUMN].to_numpy(dtype=float),
+        design["groups"],
+        int(support_size),
+        design["always_select"],
+    )
+    selected_groups = _selected_group_indices(estimator.coef_, design["groups"])
+    if not set(design["always_select"]) <= selected_groups:
+        raise AssertionError("Obligatorisk gruppe mangler i full ABESS-fit")
+    selected_blocks = [BLOCKS[index] for index in sorted(selected_groups)]
+    nonzero_mask = np.abs(estimator.coef_) > 1e-12
+    koeffisienter = pd.Series(
+        np.r_[estimator.intercept_, estimator.coef_[nonzero_mask]],
+        index=["Intercept", *np.array(design["feature_names"])[nonzero_mask]],
+        name="koeffisient",
+    )
+    return {
+        "gruppestørrelse": support_size,
+        "valgte_blokker": ", ".join(BLOCK_LABELS[block] for block in selected_blocks),
+        "valgte_blokker_rå": tuple(selected_blocks),
+        "antall_valgte_grupper": len(selected_groups),
+        "antall_parametere": 1 + int(np.count_nonzero(estimator.coef_)),
+        "koeffisienter": koeffisienter,
+    }
+
+
 def _fit_full_development_subsets(
     frame: pd.DataFrame,
     specs: dict[str, dict],
@@ -745,33 +785,47 @@ def _fit_full_development_subsets(
             matrix, design_info = _training_matrix(spec, full_design)
             full_designs[setup] = _group_design(matrix, design_info, spec)
         design = full_designs[setup]
-        estimator = _fit_abess(
-            design["matrix"],
-            frame[RESPONSE_COLUMN].to_numpy(dtype=float),
-            frame[EXPOSURE_COLUMN].to_numpy(dtype=float),
-            design["groups"],
-            int(representative.gruppestørrelse),
-            design["always_select"],
+        candidate = _fit_full_development_candidate(
+            frame, design, int(representative.gruppestørrelse)
         )
-        selected_groups = _selected_group_indices(estimator.coef_, design["groups"])
-        if not set(design["always_select"]) <= selected_groups:
-            raise AssertionError("Obligatorisk gruppe mangler i full ABESS-fit")
-        selected_blocks = [BLOCKS[index] for index in sorted(selected_groups)]
         rows.append(
             {
                 "oppsett": representative.oppsett,
                 "regel": representative.regel,
-                "gruppestørrelse": representative.gruppestørrelse,
-                "valgte_blokker": ", ".join(
-                    BLOCK_LABELS[block] for block in selected_blocks
-                ),
-                "valgte_blokker_rå": tuple(selected_blocks),
-                "antall_valgte_grupper": len(selected_groups),
-                "antall_parametere": 1 + int(np.count_nonzero(estimator.coef_)),
+                **candidate,
                 "merknad": "Fit på hele utviklingssettet; ingen ny valideringsytelse.",
             }
         )
     return pd.DataFrame(rows).sort_values(["oppsett", "regel"]), full_designs
+
+
+def _fit_full_development_grid(
+    frame: pd.DataFrame,
+    specs: dict[str, dict],
+    setups: Sequence[str],
+    support_sizes: Sequence[int],
+    prepare_design_frame: Callable,
+) -> pd.DataFrame:
+    """Fit ABESS på hele utviklingssettet for alle (oppsett, gruppestørrelse).
+
+    CV velger kun to representanter per oppsett (minimum og enklest-1SE), som
+    ofte faller sammen på samme faktiske subset. For å vise de faktisk
+    distinkte featurekombinasjonene i kandidatrommet fittes hele rutenettet
+    én gang på utviklingssettet – fortsatt uten å berøre frequency_cv eller
+    OOF-scoren, som fortsatt kommer fra den foldvise CV-en i score_curve.
+    """
+    rows = []
+    full_designs: dict[str, dict] = {}
+    for setup in setups:
+        spec = specs[setup]
+        full_design = prepare_design_frame(frame, frame, spec["required_columns"])
+        matrix, design_info = _training_matrix(spec, full_design)
+        full_designs[setup] = _group_design(matrix, design_info, spec)
+        design = full_designs[setup]
+        for support_size in support_sizes:
+            candidate = _fit_full_development_candidate(frame, design, support_size)
+            rows.append({"oppsett": setup, **candidate})
+    return pd.DataFrame(rows)
 
 
 def _poisson_deviance(frame: pd.DataFrame, prediction: pd.Series | np.ndarray) -> float:
