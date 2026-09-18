@@ -10,7 +10,6 @@ forbedrings-/forenklingsregelen, regelen for nesten like resultater og
 geografisærregelen, slik de er låst i ``plans/Severity_plan.md``.
 """
 
-import pandas as pd
 
 from src_severity.severity_selection import (
     apply_geography_rule,
@@ -280,15 +279,15 @@ def test_near_tie_missing_se_raises():
 def _make_qualifies_kwargs(
     gain, se_pair, ref_dev, folds_improved, cand_params, ref_params
 ):
-    return dict(
-        gain=gain,
-        se_pair=se_pair,
-        reference_deviance=ref_dev,
-        folds_improved=folds_improved,
-        n_folds=5,
-        candidate_parameters=cand_params,
-        reference_parameters=ref_params,
-    )
+    return {
+        "gain": gain,
+        "se_pair": se_pair,
+        "reference_deviance": ref_dev,
+        "folds_improved": folds_improved,
+        "n_folds": 5,
+        "candidate_parameters": cand_params,
+        "reference_parameters": ref_params,
+    }
 
 
 def test_geography_rule_better_than_s0_not_g1():
