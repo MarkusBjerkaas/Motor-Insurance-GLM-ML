@@ -34,6 +34,7 @@ from src_core_glm.model_data import (
     build_development_frames,
     to_model_frame,
 )
+from src_core_glm.model_selection import run_backward_ablation, select_candidate_stage
 
 SEED = 100
 N_FOLDS = 5
@@ -109,15 +110,15 @@ cv_folds = [
 # endres her er `power`. Formelen og vekten er identiske for alle kandidater.
 
 # %%
-def build_tweedie_specification(power):
+def build_tweedie_specification(power, predictors=PREDICTORS, name=None):
     """Bygg én samlet Tweedie-GLM for en forhåndsdefinert kraftparameter."""
     family = sm.families.Tweedie(
         var_power=power,
         link=sm.families.links.Log(),
     )
     return glm_spec(
-        name=f"tweedie_p_{power:.1f}",
-        x=PREDICTORS,
+        name=name or f"tweedie_p_{power:.1f}",
+        x=predictors,
         y="pure_premium",
         data=model_frame,
         family=family,
@@ -178,4 +179,67 @@ power_cv_summary = summarize_power_cv(cv_results)
 selected_power = power_cv_summary.iloc[0]["power"]
 selected_specification = tweedie_specs[selected_power]
 
-# Sluttfit kjøres først når CV-resultatet er gjennomgått og spesifikasjonen er låst.
+# %% [markdown]
+# ## 6. Variabelseleksjon med valgt `p`
+#
+# Etter at `p` er valgt, holdes den fast. Deretter brukes den eksisterende
+# treleddsregelen for kandidatvariabler: lavere pooled OOF-deviance, forbedring
+# i minst fire av fem folder og gyldig fit i alle folder. Dette skiller
+# hyperparameter-valget fra variabelseleksjonen.
+
+# %%
+selected_power = float(selected_power)
+selection_specifications = {
+    "tweedie_full": build_tweedie_specification(
+        selected_power, name="tweedie_full"
+    )
+}
+selection_results = {
+    "tweedie_full": cross_validate_glm(
+        selection_specifications["tweedie_full"],
+        model_frame,
+        cv_folds,
+        fit_kwargs=FIT_SETTINGS,
+    )
+}
+
+
+def select_tweedie_stage(parent_name, candidate_names):
+    """Bruk variabelseleksjonsregelen med valgt Tweedie-kraft."""
+    return select_candidate_stage(
+        selection_results,
+        parent_name,
+        candidate_names,
+        model_frame["pure_premium"],
+        model_frame["total_exposure"],
+        power=selected_power,
+    )
+
+
+def build_tweedie_removal(parent_name, column):
+    """Bygg en kandidat som fjerner én råprediktor fra foreldreformelen."""
+    parent_predictors = selection_specifications[parent_name]["x"]
+    predictors = [predictor for predictor in parent_predictors if predictor != column]
+    return build_tweedie_specification(
+        selected_power,
+        predictors=predictors,
+        name=f"{parent_name}_uten_{column}",
+    )
+
+
+selected_variable_model, removed_variables, variable_selection_tables = run_backward_ablation(
+    start_name="tweedie_full",
+    specifications=selection_specifications,
+    cv_results=selection_results,
+    protected_predictors=("policy_type", "year"),
+    build_candidate=build_tweedie_removal,
+    evaluate_candidate=lambda specification: cross_validate_glm(
+        specification,
+        model_frame,
+        cv_folds,
+        fit_kwargs=FIT_SETTINGS,
+    ),
+    select_stage=select_tweedie_stage,
+)
+
+# Sluttfit kjøres først når både `p` og variabelseleksjonen er gjennomgått.
