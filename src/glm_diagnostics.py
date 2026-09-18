@@ -6,6 +6,7 @@ bare funksjoner som beskriver data og folder og oppsummerer resultatene.
 
 import re
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_tweedie_deviance
@@ -131,6 +132,59 @@ def build_relativity_table(spec, result):
         .drop(columns=["_order", "_base_last"])
         .set_index(["variabel", "nivå"])
     )
+
+
+def build_coefficient_table(result):
+    """Koeffisienttabell med robuste standardfeil og 95 %-intervaller."""
+    intervals = result.conf_int()
+    return pd.DataFrame(
+        {
+            "koeffisient": result.params,
+            "standardfeil": result.bse,
+            "z": result.tvalues,
+            "p_verdi": result.pvalues,
+            "ki_95_lav": intervals.iloc[:, 0],
+            "ki_95_høy": intervals.iloc[:, 1],
+            "relativitet": np.exp(result.params),
+        }
+    )
+
+
+def compare_candidate_coefficients(fits, reference_name):
+    """Sammenlign felles koeffisienter mot en valgt referansekandidat.
+
+    Bare ledd som finnes i referansemodellen beholdes. Endringen er derfor
+    direkte lesbar som kandidatens koeffisient minus den valgte modellens.
+    """
+    if reference_name not in fits:
+        raise KeyError(f"Referansemodellen finnes ikke: {reference_name}")
+
+    reference = fits[reference_name].params.rename(reference_name)
+    comparison = reference.to_frame()
+    for name, fit in fits.items():
+        if name == reference_name:
+            continue
+        coefficients = fit.params.rename(name)
+        comparison = comparison.join(coefficients, how="left")
+        comparison[f"endring_fra_{reference_name}_{name}"] = (
+            comparison[name] - comparison[reference_name]
+        )
+    return comparison
+
+
+def plot_glm_residuals(result, data):
+    """Plott deviance-residualer mot estimert frekvens for en GLM."""
+    fitted = result.predict(data)
+    residuals = result.resid_deviance
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.scatter(fitted, residuals, alpha=0.12, s=12, color="#2f6690", linewidths=0)
+    ax.axhline(0, color="#b23a2f", linestyle="--", linewidth=1)
+    ax.set(
+        title="Deviance-residualer mot estimert skadefrekvens",
+        xlabel="Estimert skadefrekvens per eksponeringsår",
+        ylabel="Deviance-residual",
+    )
+    return fig
 
 
 def summarize_cv_scores(fold_scores):

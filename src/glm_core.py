@@ -45,7 +45,8 @@ def prepare_design_frame(train, apply, required_columns, categorical=("year",)):
                 )
         else:
             prepared[column] = prepared[column].fillna(train[column].median())
-    assert prepared[list(required_columns)].notna().all().all()
+    if not prepared[list(required_columns)].notna().all().all():
+        raise ValueError("Manglende verdier gjenstår etter klargjøring av modellrammen.")
     return prepared
 
 
