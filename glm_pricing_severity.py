@@ -70,12 +70,19 @@ from IPython.display import display
 from sklearn.metrics import mean_tweedie_deviance
 
 from src.glm_core import (
+    fit_glm,
     glm_spec,
     prepare_design_frame,
     prepare_fold_frames,
 )
 from src.model_data import assert_development_years, build_development_frames
-from src_severity import severity_descriptives
+from src_severity import (
+    severity_bootstrap,
+    severity_calibration,
+    severity_descriptives,
+    severity_influence,
+    severity_time,
+)
 from src_severity.selection_tests import run_all
 from src_severity.severity_cv import (
     build_fold_deviance_table,
@@ -956,13 +963,481 @@ print("Nesten like:", finalist_choice["nesten_like"])
 # ## 5. Diagnostikk etter seleksjon
 
 # %%
-# TODO(agent-6): kalibrering, bootstrap, innflytelse, tid
+# Finalistvalget er avsluttet: diagnostikken bruker bare disse faste OOF-
+# prediksjonene og åpner ikke kandidatregisteret på nytt.
+assert FINALIST == "C1"
+FIXED_OOF_PREDICTIONS = {
+    name: severity_results[name]["oof"].reindex(severity_frame.index)
+    for name in ("S0", "C1")
+}
+assert all(pred.notna().all() for pred in FIXED_OOF_PREDICTIONS.values())
+
+# %% [markdown]
+# ### 5.1 A/E-kalibrering og prediksjonsdesiler
+#
+# A/E er faktisk kostnad delt på forventet kostnad
+# $\sum_i N_i\hat\mu_i$. Desilene defineres én gang fra S0s OOF-prediksjon,
+# skadeantallsvektet, og brukes uendret for C1. `N=1` er et selektert utvalg av
+# skadeår — ikke nødvendigvis én fysisk hendelse.
+
+# %%
+CALIBRATION_SEGMENTS = [
+    "policy_type",
+    "year",
+    "municipality_type",
+    "circulation_area",
+]
+calibration_ae = severity_calibration.build_ae_table(
+    severity_frame, FIXED_OOF_PREDICTIONS, CALIBRATION_SEGMENTS
+)
+calibration_deciles = severity_calibration.build_decile_table(
+    severity_frame, FIXED_OOF_PREDICTIONS, reference_model="S0"
+)
+
+# %%
+calibration_report = pd.concat(
+    [
+        calibration_ae.assign(
+            output="A/E-segment", desil=pd.NA, faktisk_severity=pd.NA,
+            gjennomsnitt_predikert=pd.NA,
+        ),
+        calibration_deciles.assign(
+            output="S0-desil", variabel="S0_prediksjonsdesil",
+            nivå=calibration_deciles["desil"],
+        ),
+    ],
+    ignore_index=True,
+    sort=False,
+)
+display(
+    calibration_report[
+        [
+            "output", "variabel", "nivå", "modell", "unike_personer",
+            "skadeantall", "A_E", "gjennomsnitt_predikert",
+            "faktisk_severity",
+        ]
+    ].round(4)
+)
+
+# %%
+display(severity_calibration.plot_calibration(calibration_deciles, calibration_ae))
+
+# %% [markdown]
+# **Konklusjon 5.1.** A/E skal vurderes mot 1,0, ikke mot en ny seleksjonsregel.
+# Desilene og segmentene over viser om modellens nivå er rimelig fordelt, mens
+# `N=1` må tolkes med forbehold fordi det er et selektert skadeårssegment.
+
+# %% [markdown]
+# ### 5.2 Beløpsklasser og foldstabilitet
+#
+# Beløpsklassene er faste og diagnostiske. De endrer ikke responsen eller åpner
+# nye kandidatspesifikasjoner. Foldstabiliteten beskriver hvor mye de allerede
+# estimerte effektene flytter seg mellom de fem hovedfoldene.
+
+# %% [markdown]
+# #### 5.2a Beløpsklasser
+
+# %%
+contribution_table = severity_calibration.build_contribution_table(
+    severity_frame, FIXED_OOF_PREDICTIONS
+)
+display(contribution_table.round(4))
+
+# %% [markdown]
+# #### 5.2b Foldstabilitet og numerisk korrelasjon
+
+# %%
+stability_table = severity_calibration.build_fold_coefficient_table(
+    severity_results, ["S0", "C1"]
+)
+correlation_input = severity_frame.dropna(
+    subset=["driver_age", "log_vehicle_value"]
+)
+correlation_table = severity_calibration.build_numeric_correlation_table(
+    correlation_input, ["driver_age", "log_vehicle_value"]
+)
+driver_value_correlation = correlation_table.loc[
+    correlation_table["variabel_1"].eq("driver_age")
+    & correlation_table["variabel_2"].eq("log_vehicle_value"),
+    "korrelasjon",
+].iloc[0]
+display(stability_table.round(4))
+print(f"Vektet korr(driver_age, log_vehicle_value) = {driver_value_correlation:.6f}")
+
+# %% [markdown]
+# **Konklusjon 5.2.** Foldstabilitet og korrelasjon er fortolkningsdiagnostikk,
+# ikke automatisk variabelseleksjon. C1 inneholder ikke ytelse, så den spesifikke
+# bilverdi–ytelse-kollinearitetsbetingelsen er ikke aktuell; korrelasjonen mellom
+# alder og log-bilverdi rapporteres likevel. Eventuell ustabilitet i en enkelt
+# koeffisient må skilles fra stabiliteten i samlede prediksjoner.
+
+# %% [markdown]
+# ### 5.3 Cluster-bootstrap og EUR-stopp
+#
+# Bootstrapen bruker 2 000 cluster-trekk på `insured_id` med seed 410 og faste
+# OOF-prediksjoner. Den refitter ikke modeller og gjentar ikke seleksjonen. Først
+# bygges S0-desilene på samme skadeantallsvektede grunnlag som i kalibreringen.
+
+# %%
+decile_order = FIXED_OOF_PREDICTIONS["S0"].sort_values().index
+decile_claim_share = severity_frame.loc[decile_order, "property_claims"].cumsum()
+s0_deciles = pd.Series(
+    np.ceil(
+        decile_claim_share.to_numpy()
+        / severity_frame.loc[decile_order, "property_claims"].sum()
+        * severity_calibration.N_DECILES
+    ).clip(max=severity_calibration.N_DECILES).astype(int),
+    index=decile_order,
+    name="S0_desil",
+).reindex(severity_frame.index)
+
+# %%
+bootstrap_deviance = severity_bootstrap.bootstrap_deviance_ci(
+    severity_frame, FIXED_OOF_PREDICTIONS, n_draws=2000, seed=410
+)
+bootstrap_gain = severity_bootstrap.bootstrap_gain_ci(
+    severity_frame, FIXED_OOF_PREDICTIONS, "S0", "C1", n_draws=2000, seed=410
+)
+
+# %%
+bootstrap_ae = severity_bootstrap.bootstrap_ae_ci(
+    severity_frame,
+    FIXED_OOF_PREDICTIONS,
+    n_draws=2000,
+    seed=410,
+    extra_segments={"S0_desil": s0_deciles},
+)
+bootstrap_stops = severity_bootstrap.evaluate_stop_criteria(bootstrap_ae)
+bootstrap_key_ae = bootstrap_ae.loc[
+    bootstrap_ae["variabel"].isin(["Totalt", "policy_type", "S0_desil"])
+].copy()
+
+# %%
+bootstrap_report = bootstrap_key_ae.rename(
+    columns={"A_E": "punkt", "utelukker_1": "CI_utelukker_1"}
+).assign(mål="A/E")
+bootstrap_report = bootstrap_report[
+    ["mål", "modell", "variabel", "nivå", "punkt", "lav", "høy", "CI_utelukker_1"]
+]
+deviance_report = bootstrap_deviance.assign(
+    mål="Deviance", variabel="Totalt", nivå="Totalt",
+    CI_utelukker_1=pd.NA,
+).rename(columns={"punkt": "punkt"})[
+    ["mål", "modell", "variabel", "nivå", "punkt", "lav", "høy", "CI_utelukker_1"]
+]
+gain_report = pd.DataFrame(
+    [{
+        "mål": "Gevinst S0-C1", "modell": "C1", "variabel": "Totalt",
+        "nivå": "Totalt", "punkt": bootstrap_gain["punkt"],
+        "lav": bootstrap_gain["lav"], "høy": bootstrap_gain["høy"],
+        "CI_utelukker_1": pd.NA,
+    }]
+)
+display(pd.concat([deviance_report, gain_report, bootstrap_report], ignore_index=True).round(6))
+print("EUR-stopp utløst:", bool(bootstrap_stops["utløst"].any()))
+
+# %% [markdown]
+# **Konklusjon 5.3.** Intervallene over er betinget på de faste OOF-
+# prediksjonene og dokumenterer derfor ikke parameterusikkerhet eller
+# urepresenterte haler. EUR-stopp vurderes først når både materiell avstand fra
+# 1,0 og et intervall som utelukker 1,0 er til stede.
+
+# %% [markdown]
+# ### 5.4 Innflytelse fra de fem dyreste personene
+#
+# I hver treningsfold fjernes de fem `insured_id` med høyest samlet registrert
+# kostnad. Med uendret modellformel refittes S0 og C1 og predikerer den
+# opprinnelige valideringsfolden. Dette er nøyaktig ti diagnostiske refittinger;
+# de kan ikke bli nye kandidater.
+#
+# $Y_i\sim\operatorname{Gamma}(\mu_i,\phi/N_i)$ og
+# $\log(\mu_i)=x_i^\top\beta$ for både S0 og C1. Den eneste endringen er at
+# de fem dyreste personene fjernes fra hver treningsfold; respons, vekt,
+# preprocessing og modellformel er ellers uendret.
+
+# %%
+influence_specs = {name: severity_specs[name] for name in ("S0", "C1")}
+influence_sensitivity = severity_influence.run_influence_sensitivity(
+    influence_specs,
+    severity_frame,
+    cv_folds,
+    FIT_SETTINGS,
+    prepare_fold_frames,
+    prepare_design_frame,
+)
+assert influence_sensitivity["antall_refittinger"] == 10
+assert influence_sensitivity["log"]["konvergerte"].all()
+
+# %%
+influence_table = severity_influence.build_influence_table(
+    severity_frame,
+    FIXED_OOF_PREDICTIONS,
+    influence_sensitivity["oof"],
+)
+influence_stops = severity_influence.evaluate_influence_stop(influence_table)
+top_persons = severity_influence.build_top_persons_table(severity_frame, cv_folds)
+display(influence_table.round(6))
+print("Innflytelsesstopp utløst:", bool(influence_stops["utløst"].any()))
+
+# %%
+display(severity_influence.plot_influence(influence_table, top_persons))
+
+# %% [markdown]
+# **Konklusjon 5.4.** Sensitiviteten gjelder kun den låste topp-fem-personer-
+# kontrollen. En liten endring i pooled forventet kostnad gjør ikke modellen
+# immun mot andre former for datasensitivitet, men en overskridelse av de faste
+# 5 %-/10 %-grensene ville stoppet sluttgodkjenningen.
+
+# %% [markdown]
+# ### 5.5 Årskontroll 2022 → 2023
+#
+# Årskontrollen bruker én fast kalenderovergang. Begge modeller fittes på 2022,
+# uten årsledd, og evalueres på 2023. Med $Y_i=\bar X_i$ er arbeidsmodellen
+# $Y_i\sim\operatorname{Gamma}(\mu_i,\phi/N_i)$ og
+# $\log(\mu_i)=\beta_0+x_i^\top\beta$; `year` er eksplisitt utelatt.
+
+# %%
+time_control = severity_time.run_year_control(
+    severity_specs["C1"]["x"],
+    severity_specs["S0"]["x"],
+    BASE_LEVELS,
+    severity_frame,
+    FIT_SETTINGS,
+    prepare_fold_frames,
+    prepare_design_frame,
+)
+
+# %%
+time_2022 = severity_frame.loc[severity_frame["year"].eq(2022)]
+time_2023 = severity_frame.loc[severity_frame["year"].eq(2023)]
+time_level_shift = severity_time.build_level_shift_table(
+    time_2023, time_control["predictions"], time_2022
+)
+time_stop = severity_time.evaluate_time_stop(
+    time_2023, time_control["predictions"]
+)
+time_score_table = time_control["scores"].merge(
+    time_level_shift[["modell", "A_E", "severity_2022", "severity_2023"]],
+    on="modell",
+)
+time_score_table = time_score_table.assign(
+    tidsgevinst_S0_minus_C1=time_stop["gevinst"],
+    SE_cluster=time_stop["SE_cluster"],
+    terskel_0_5_prosent=time_stop["terskel_relativ"],
+    tidsstopp_utløst=time_stop["utløst"],
+)
+display(time_score_table.round(6))
+print(time_stop["begrunnelse"])
+
+# %% [markdown]
+# #### 5.5a Segmentenes A/E
+
+# %%
+time_segment_ae = severity_time.build_segment_ae_table(
+    severity_frame, time_control["predictions_by_year"], total_ae=None
+)
+display(time_segment_ae.round(4))
+
+# %% [markdown]
+# #### 5.5b Segmentdrift
+#
+# Segmentdriftstopp vurderes separat fra segmentenes A/E-tabell.
+
+# %%
+time_segment_drift = severity_time.build_segment_drift_table(
+    severity_frame,
+    time_control["predictions_by_year"],
+    min_persons=100,
+    n_draws=2000,
+    seed=410,
+)
+assert not time_segment_drift["utløst"].any()
+display(time_segment_drift.round(4))
+
+# %% [markdown]
+# Segmentdrift vurderes på normalisert A/E, slik at et globalt nivåskift ikke
+# feilaktig kalles relativ drift. Q skal leses separat per segmentvariabel.
+# For skadeantallsgruppene ligger Q i denne årskontrollen omtrent mellom 1,022
+# og 1,070, avhengig av modell og nivå. Alle 95 % cluster-bootstrap-intervall
+# inkluderer 1,0, og segmentdriftstoppet utløses derfor ikke. `N=1` er et
+# selektert utvalg og ikke nødvendigvis én fysisk hendelse.
+
+# %% [markdown]
+# #### 5.5c Årskostnad
+
+# %%
+year_cost = severity_time.build_year_cost_table(model_frame, severity_frame)
+display(year_cost.round(4))
+
+# %% [markdown]
+# #### 5.5d Miksstandardisering
+#
+# Miksstandardiseringen er en egen forklarende kontroll; den er ikke en
+# valideringsscore for et nytt datasett.
+#
+# Begge årstilpasningene bruker $Y_i\sim\operatorname{Gamma}(\mu_i,\phi/N_i)$
+# og $\log(\mu_i)=x_i^\top\beta$ uten årsledd. De fittes separat per år og
+# predikerer samme samlede positive utviklingspopulasjon med samme skadevekter.
+
+# %%
+mix_standardization = severity_time.run_mix_standardization(
+    severity_specs["C1"]["x"],
+    severity_specs["S0"]["x"],
+    BASE_LEVELS,
+    severity_frame,
+    FIT_SETTINGS,
+    prepare_fold_frames,
+    prepare_design_frame,
+)
+display(mix_standardization["kostnad"].round(6))
+
+# %% [markdown]
+# #### 5.5e Dekning
+#
+# Dekningstabellen viser hvor mye av referansepopulasjonen som ligger utenfor
+# treningsårets observerte kovariatområde. Dette er støtteinformasjon, ikke en
+# ny valideringsscore.
+
+# %%
+display(mix_standardization["dekning"].round(6))
+
+# %% [markdown]
+# #### 5.5f Årskontroll-plott
+#
+# Segmenttabellen inneholder begge år. Plottet bruker derfor uttrykkelig bare
+# 2023-delen, siden nivålinjene kommer fra `time_level_shift` for 2023.
+
+# %%
+time_segment_ae_2023 = time_segment_ae.loc[time_segment_ae["year"].eq(2023)]
+display(severity_time.plot_year_control(time_segment_ae_2023, time_level_shift))
+
+# %% [markdown]
+# **Konklusjon 5.5.** Tidsstoppregelen for finalistens pooled score og
+# segmentdriftstoppet utløses ikke; dette rapporteres som «ingen forverring
+# påvist i denne tidsdelingen». Det er én kalenderovergang, så resultatene
+# dokumenterer ikke tidsstabilitet. Årskostnad, miksstandardisering og dekning
+# er forklarende kontroller; miksstandardisering predikerer samme samlede
+# referansepopulasjon og er ikke en uavhengig validering.
+
+# %% [markdown]
+# ### 5.6 Residualdiagnostikk og fortolkningsbegrensning
+#
+# Deviance-residualene beregnes på 2023-radene som ikke inngikk i 2022-fitten.
+# Plottet er kun diagnostisk: det kan ikke legitimere ny seleksjon, nye terskler
+# eller automatisk fjerning av variabler.
+
+# %%
+time_c1_terms = severity_time.drop_year_term(severity_specs["C1"]["x"])
+display(
+    severity_time.plot_oof_residuals(
+        "C1", time_c1_terms, time_2023, time_control["predictions"]
+    )
+)
+
+# %% [markdown]
+# **Konklusjon 5.6.** Residualdiagnostikken brukes til å beskrive hvor
+# fortolkningsbegrensningene ligger, ikke til automatisk ny seleksjon. C1 har
+# ikke ytelse, så en spesifikk bilverdi–ytelse-betingelse kan ikke vurderes som
+# aktuell; den rapporterte alder–bilverdi-korrelasjonen og foldstabiliteten må
+# likevel tas med ved tolkning av koeffisientene. Svakt støttede segmenter skal
+# ikke alene bære en faglig konklusjon.
 
 # %% [markdown]
 # ## 6. Sluttfit og leveranse
+#
+# Når kontrollene i seksjon 5 er avklart, fittes den valgte spesifikasjonen på
+# **alle** 5 698 positive skadeår. S0 beholdes som dokumentert referanse.
+#
+# Finalisten C1 er en Gamma-GLM med log-link:
+#
+# $$
+# \log \mu_i \;=\; \beta_0
+#   + \beta_{\text{COMP\_N}}\,\mathbb{1}[\text{produkt}_i = \text{COMP\_N}]
+#   + \beta_{2023}\,\mathbb{1}[\text{år}_i = 2023]
+#   + \beta_{R}\,\mathbb{1}[\text{kjøresone}_i = R]
+#   + \beta_{\text{alder}}\,\text{alder}_i
+#   + \beta_{\text{verdi}}\,\log(\text{bilverdi}_i),
+# $$
+#
+# der $\mu_i$ er forventet **gjennomsnittsskade** for poliseår $i$, estimert med
+# `var_weights` $= N_i$ (antall registrerte skader). Referansenivåene er COMP_E,
+# 2022 og kjøresone U. Fordi linken er logaritmisk, er $e^{\beta}$ en
+# **multiplikativ relativitet**: en koeffisient på 0,10 betyr ca. 10,5 % høyere
+# forventet snittskade enn referansenivået, alt annet likt.
+#
+# Preprocessing er identisk med den som ble brukt i kryssvalideringen
+# (`prepare_design_frame`), men lært fra hele severity-utvalget siden det nå er
+# treningsdataene. Standardfeilene er cluster-robuste på `insured_id` (S-04).
 
 # %%
-# TODO(agent-7): sluttfit
+FINAL_SPECS = {"C1": severity_specs[FINALIST], "S0": severity_specs["S0"]}
+
+final_models = {}
+for name, spec in FINAL_SPECS.items():
+    (design,), _ = prepare_fold_frames(
+        spec, severity_frame, [severity_frame], prepare_design_frame
+    )
+    final_models[name] = fit_glm(
+        spec, design, cluster_groups=design["insured_id"], fit_kwargs=FIT_SETTINGS
+    )
+    assert final_models[name].converged, name
+
+# %%
+def coefficient_table(model, name):
+    """Koeffisienter med cluster-robust SE og multiplikativ relativitet."""
+    confidence = model.conf_int()
+    return pd.DataFrame({
+        "modell": name,
+        "ledd": model.params.index,
+        "koeffisient": model.params.to_numpy(),
+        "SE_cluster": model.bse.to_numpy(),
+        "relativitet": np.exp(model.params.to_numpy()),
+        "relativitet_lav": np.exp(confidence[0].to_numpy()),
+        "relativitet_høy": np.exp(confidence[1].to_numpy()),
+    })
+
+
+final_coefficients = pd.concat(
+    [coefficient_table(model, name) for name, model in final_models.items()],
+    ignore_index=True,
+)
+display(final_coefficients.round(4))
+
+# %% [markdown]
+# **Tolkning av C1-sluttfitten.** Alt annet likt er forventet registrert
+# severity for `COMP_N` omtrent 0,67 ganger nivået for `COMP_E`, for 2023
+# omtrent 0,92 ganger nivået for 2022, og for kjøresone `R` omtrent 1,11 ganger
+# nivået for `U`. Koeffisienten for `log_vehicle_value` er cirka 0,199 og kan
+# tolkes som en elastisitet: 10 % høyere bilverdi tilsvarer omtrent 1,9 % høyere
+# forventet severity. Alderseffekten er omtrent 0,999 per ekstra år, med et
+# konfidensintervall som inkluderer 1. Dette er assosiasjoner i registrert
+# `property_incurred`, ikke kausale effekter.
+
+# %% [markdown]
+# **Begrensninger ved sluttleveransen.** Seleksjonen har en tilsiktet preferanse
+# for enklere modeller når resultatene er tilnærmet like. Det gjelder også når
+# den enklere modellen ikke forbedrer alle, eller flertallet av, foldene; dette
+# er en forhåndslåst beslutningsregel og ikke en signifikanstest.
+#
+# Bare én kombinert kandidat, C1, ble testet. En bedre delkombinasjon kan derfor
+# være uoppdaget, og C1 hevdes ikke å være best blant alle mulige kombinasjoner.
+# De samme CV-radene ble brukt gjennom kandidatseleksjonen og rapporteringen.
+# Gevinsten er derfor seleksjonsoptimistisk og er ikke en uavhengig evaluering av
+# vinneren; 1-SE- og 0,5 %-grensene er beslutningsheuristikker uten kontrollert
+# samlet feilrate.
+#
+# Tidskontrollen dekker bare én kalenderovergang. «Ingen forverring påvist i
+# denne tidsdelingen» dokumenterer derfor ikke tidsstabilitet. Korrelasjon mellom
+# variabelblokker gjør at enkeltkoeffisienter kan være usikkert fortolket, selv
+# når samlede prediksjoner er stabile, og svakt støttede segmenter skal ikke
+# alene bære en faglig konklusjon.
+#
+# Responsen er registrert `property_incurred`, ikke ultimate skadebeløp. Den
+# rapporterte Gamma-modellen og kalibreringen gjelder derfor registrert kostnad
+# slik den foreligger i dataene. Bootstrapintervallene er betinget på faste OOF-
+# prediksjoner: de refitter ikke modellene og inkluderer ikke modell- eller
+# seleksjonsusikkerhet. Alle terskler i seleksjon og stoppregister er
+# beslutningsheuristikker, ikke signifikanstester.
 
 # %% [markdown]
 # ## 7. Beslutningsregister
@@ -985,5 +1460,9 @@ print("Nesten like:", finalist_choice["nesten_like"])
 # | S-07 | Gyldighetskrav i alle fem folder: ≥ 50 unike `insured_id` per kategorinivå i severity-treningen, full rang, endelige parametere, positive endelige prediksjoner, ingen usette nivåer, og konvergens med `maxiter=200`, `tol=1e-8` likt for alle kandidater. | Like innstillinger gjør scoreforskjeller til modellforskjeller, ikke optimeringsforskjeller. Ingen redningsforsøk med ny pooling eller regularisering. | Brukerbesluttet | 2.5 |
 # | S-08 | Forbedring: $D_{\text{ref}} - D_{\text{kand}} > \max(\mathrm{SE}_{\text{par}}, 0{,}005\,D_{\text{ref}})$ og ≥ 4/5 folder. Forenkling: $D_{\text{kand}} - D_{\text{ref}} \le \min(\mathrm{SE}_{\text{par}}, 0{,}005\,D_{\text{ref}})$, uten foldkrav. Reglene er testet syntetisk i `src_severity/selection_tests.py`. | Asymmetrien uttrykker den avtalte preferansen for enkelhet. Grensene er konservative beslutningsheuristikker, ikke signifikanstester, og gir ingen kontrollert samlet feilrate. | Brukerbesluttet | 2.6 |
 # | S-09 | Algoritmen kjøres **én** gang i den låste rekkefølgen, med geografisærregelen for G2 og høyst én kombinert kandidat C1. Budsjett: ≤ 11 spesifikasjoner × 5 folder = ≤ 55 hovedtilpasninger. Diagnostiske refittinger føres separat og kan ikke bli kandidater. | Én gjennomkjøring uten omkamp er det som holder seleksjonsoptimismen på et nivå vi kan beskrive. Søket er avsluttet også når konklusjonen blir at S0 beholdes. | Brukerbesluttet | 2.7 |
-# | S-10 | Designmatrisene bygges og kontrolleres foldvis mot kandidatregisteret før første kandidatfit. Avvik håndteres etter S-07 — parametertall eller nivåer endres aldri stille for å få en kandidat til å passe. | Et avvik mellom registeret og den faktiske designmatrisen ville gjort parametertellingen i seleksjonsreglene feil. | Foreslått | 3.5 |
-# | S-11 | OOF-prediksjoner lagres for **alle** poliseår i valideringsfolden, ikke bare de positive skadeårene, via et `fold_hook`. Severity-scoren beregnes fortsatt kun på det definerte positive utvalget. | En senere frekvens–severity-sammenkobling trenger komplette OOF-prediksjoner. Nivåer som bare finnes blant skadefrie poliseår har ingen severity-treningsdata; folden markeres da i stedet for å stoppe kjøringen. | Foreslått | 2.3 |
+# | S-10 | Designmatrisene bygges og kontrolleres foldvis mot kandidatregisteret før første kandidatfit. Avvik håndteres etter S-07 — parametertall eller nivåer endres aldri stille for å få en kandidat til å passe. | Registerets nivåer, referanser og parametertall er kontrollert mot de faktiske foldvise designmatrisene før seleksjonen. | Implementert/verifisert | 3.5 |
+# | S-11 | OOF-prediksjoner lagres for **alle** poliseår i valideringsfolden, ikke bare de positive skadeårene, via et `fold_hook`. Severity-scoren beregnes fortsatt kun på det definerte positive utvalget. | Alle utviklingsrader fikk én OOF-prediksjon, slik at senere frekvens–severity-sammenkobling kan bruke komplette prediksjoner. | Implementert/verifisert | 2.3 |
+# | S-12 | C1 er låst som finalist mot S0 etter den ene forhåndsdefinerte seleksjonsgjennomføringen. | C1 hadde pooled gevinst 0,004170 mot S0 med cluster-SE 0,002203 og besto den låste finalistregelen. Ingen ny kombinasjonsrunde ble startet. | Implementert/verifisert | 4.5 |
+# | S-13 | Kalibrering, faste-OOF-bootstrap, innflytelse, residualer og korrelasjonsdiagnostikk er gjennomført etter seleksjonen. | Ingen EUR-, innflytelses-, tids- eller segmentdriftstopp ble utløst i de verifiserte kontrollene. Bootstrapen refitter ikke og er betinget på de faste OOF-prediksjonene. | Implementert/verifisert | 5.1–5.6 |
+# | S-14 | Tidskontrollen er en låst 2022→2023-kontroll uten årsledd; segmentdrift vurderes med normalisert A/E-forhold $Q$ og felles bootstrapoppsett. | Det er én kalenderovergang. Pooled tidsstopp og segmentdriftstopp utløses ikke; Q for skadeantallsgruppene ligger omtrent 1,022–1,070, med intervaller som inkluderer 1,0. | Implementert/verifisert | 5.5 |
+# | S-15 | Sluttfitten bruker de låste C1- og S0-spesifikasjonene på alle 5 698 positive skadeår, med Gamma-log-link og cluster-robuste standardfeil. | Finalisten og den dokumenterte referansen er fittet med samme preprocessing og konvergerte; koeffisienter, relativiteter og intervaller leveres i én samlet tabell. | Implementert/verifisert | 6 |
