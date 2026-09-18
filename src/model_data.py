@@ -26,6 +26,15 @@ prediktorer:
 ``build_model_frames`` kjører hele kjeden fra CSV til ferdige rammer. CV-folder,
 imputasjon og modellspesifikasjoner ligger bevisst ikke her. De er en del av
 modelleringen og defineres i notebooken.
+
+``build_development_frames`` er en alternativ, "sikker" inngang for severity-fasen:
+CSV-en leses i biter (``chunksize``), og rader utenfor ``TRAIN_YEARS`` forkastes
+i hver bit FØR noe annet skjer. Dermed materialiseres 2024 aldri som en ramme og
+rekker aldri rensing eller transformasjon. Resten av kjeden er identisk med
+``build_model_frames``, men uten test-splitt og uten en ``"test"``-nøkkel.
+``assert_development_years`` er en enkel inngangskontroll som severity-koden
+kan bruke for å stoppe umiddelbart dersom et annet år enn utviklingsårene
+skulle nå en analysefunksjon.
 """
 
 from pathlib import Path
@@ -142,6 +151,50 @@ def build_model_frames(data_path=DATA_PATH, brand_min_exposure=BRAND_MIN_EXPOSUR
     return {
         "train_pool": add_transparent_predictors(train_pool, retained_brands),
         "test": add_transparent_predictors(test, retained_brands),
+        "retained_brands": retained_brands,
+        "brand_exposure": brand_exposure,
+        "cleaning_log": cleaning_log,
+    }
+
+
+def assert_development_years(frame, allowed_years=TRAIN_YEARS):
+    """Stopp umiddelbart hvis andre år enn utviklingsårene har nådd en analysefunksjon."""
+    unexpected_years = set(frame["year"]) - set(allowed_years)
+    if unexpected_years:
+        raise ValueError(
+            f"Fant år utenfor utviklingsperioden {allowed_years}: {sorted(unexpected_years)}. "
+            "2024 skal aldri nå en analysefunksjon."
+        )
+
+
+def build_development_frames(
+    data_path=DATA_PATH, brand_min_exposure=BRAND_MIN_EXPOSURE, chunksize=100_000
+):
+    """Kjør utviklingskjeden i biter, slik at 2024 aldri materialiseres som en ramme.
+
+    CSV-en leses med ``chunksize``, og hver bit avgrenses til ``TRAIN_YEARS`` før
+    noe annet gjøres med den. Bare de filtrerte bitene settes sammen til én rå
+    utviklingspopulasjon, som deretter renses og prosesseres med nøyaktig samme
+    steg som ``build_model_frames``: ``clean_motor_data`` → ``select_own_damage_scope``
+    → ``learn_retained_brands`` → ``add_transparent_predictors``.
+
+    Returnerer en dict med ``development``, ``retained_brands``, ``brand_exposure``
+    og ``cleaning_log``. Det finnes bevisst ingen ``"test"``-nøkkel.
+    """
+    chunk_reader = pd.read_csv(
+        data_path, sep=";", encoding="utf-8", low_memory=False, chunksize=chunksize
+    )
+    development_chunks = [
+        chunk.loc[chunk["year"].isin(TRAIN_YEARS)] for chunk in chunk_reader
+    ]
+    raw_development = pd.concat(development_chunks)
+    data, cleaning_log = clean_motor_data(raw_development, build_variable_dictionary())
+    development = select_own_damage_scope(data)
+    retained_brands, brand_exposure = learn_retained_brands(
+        development, min_exposure=brand_min_exposure
+    )
+    return {
+        "development": add_transparent_predictors(development, retained_brands),
         "retained_brands": retained_brands,
         "brand_exposure": brand_exposure,
         "cleaning_log": cleaning_log,

@@ -3514,9 +3514,12 @@ display(
 # har laveste pooled OOF-deviance ved ni grupper og velger samme subset:
 # produkt, år, føreralder, log(bilverdi), drivstoff, urban/rural,
 # betalingsfrekvens, NB/P og poolingsdefinert merke. Ytelse, kommune og seter
-# velges ikke. ABESS taper 0,000531 i pooled OOF Poisson-deviance mot F5
-# (cluster-SE 0,000840). Dette er dermed ikke engang en bedre utviklingsscore,
-# langt mindre dokumentasjon på generaliseringsgevinst.
+# velges ikke. ABESS har 0,000531 **lavere** pooled OOF Poisson-deviance enn F5,
+# altså en marginalt bedre utviklingsscore. Forskjellen er 0,63 cluster-SE
+# (SE 0,000840) og dermed godt innenfor støyen. En liten, usikker utviklingsgevinst
+# er ikke dokumentasjon på generaliseringsgevinst, og den utløser ikke
+# forenklingsregelens motsats: ABESS-subsettet har 30 parametere mot F5s 13, så en
+# uvesentlig scoreforskjell taler for den enklere modellen. F5 beholdes.
 #
 # For poliseår $i$ med skadeantall $N_i$, eksponering $e_i$ og et helt sett av
 # valgte variabelblokker $S$ brukes
