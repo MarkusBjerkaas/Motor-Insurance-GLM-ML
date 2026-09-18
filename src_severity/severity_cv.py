@@ -34,7 +34,9 @@ def run_candidates(specs, severity_frame, folds, fit_kwargs, fold_hook=None):
 
     Returnerer ``(results, budget)``: ``results`` er en dict ID ->
     ``cross_validate_glm``-resultat, og ``budget`` er antall hovedtilpasninger
-    som faktisk ble brukt (kandidater × folder). Budsjettet i S-09 er 55.
+    som faktisk ble brukt (kandidater × folder). Kalleren kan sende inn et
+    før-fit-filtrert register; protokollmaksimumet for 14 faste kandidater er
+    70, og én kombinert kandidat kan øke dette til maksimalt 75.
     """
     results = {
         name: cross_validate_glm(

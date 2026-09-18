@@ -378,6 +378,10 @@ _DEFAULT_SUPPORT_COLUMNS = (
     "year",
     "municipality_type",
     "circulation_area",
+    "fuel_type",
+    "business_type",
+    "payment_frequency",
+    "vehicle_brand_pooled",
     "setekategori",
     "skadeantallsgruppe",
 )
@@ -392,15 +396,16 @@ def _add_support_columns(severity_frame):
 
 
 def build_support_table(severity_frame, group_columns=None):
-    """Støtte per segment for policy_type, year, geografi, setekategori og skadeantallsgruppe.
+    """Støtte per segment for standardvariablene i kandidatdiagnostikken.
 
-    ``group_columns`` er som standard de seks variablene ``policy_type``,
-    ``year``, ``municipality_type``, ``circulation_area``, setekategori
-    (`<5`/`=5`/`>5`) og skadeantallsgruppe (`N=1`/`N=2-3`/`N>=4`). For hvert
-    nivå i hver variabel rapporteres ``antall_skadeår``, ``unike_personer``,
-    ``skadeantall``, ``kostnadsandel`` (andel av total ``property_incurred``)
-    og ``skadevektet_severity`` (= sum ``property_incurred`` / sum
-    ``property_claims`` i segmentet).
+    ``group_columns`` er som standard ``policy_type``, ``year``,
+    ``municipality_type``, ``circulation_area``, ``fuel_type``,
+    ``business_type``, ``payment_frequency``, ``vehicle_brand_pooled``,
+    setekategori (`<5`/`=5`/`>5`) og skadeantallsgruppe
+    (`N=1`/`N=2-3`/`N>=4`). For hvert nivå i hver variabel rapporteres
+    ``antall_skadeår``, ``unike_personer``, ``skadeantall``, ``kostnadsandel``
+    (andel av total ``property_incurred``) og ``skadevektet_severity`` (= sum
+    ``property_incurred`` / sum ``property_claims`` i segmentet).
 
     Returnerer én lang DataFrame med kolonnene ``variabel``, ``nivå`` og
     målene over, slik at alle variablene vises i samme tabell.
@@ -439,15 +444,15 @@ def build_support_table(severity_frame, group_columns=None):
     return pd.concat(rows, ignore_index=True)
 
 
-def plot_support(severity_frame):
-    """Skadevektet severity per nivå for de seks støttevariablene, med personantall synlig.
+def plot_support(severity_frame, group_columns=None):
+    """Skadevektet severity per støttenivå, med personantall synlig.
 
-    Én figur med ett panel per variabel (policy_type, year, municipality_type,
-    circulation_area, setekategori, skadeantallsgruppe). Antall unike personer
-    bak hvert nivå annoteres over søylen, slik at svakt støttede nivåer er
-    synlige direkte i plottet.
+    Én figur med ett panel per variabel i ``build_support_table``. Antall
+    unike personer bak hvert nivå annoteres over søylen, slik at svakt støttede
+    nivåer er synlige direkte i plottet. Panelantallet bestemmes av tabellen,
+    ikke av en fast antakelse om antall støttevariabler.
     """
-    table = build_support_table(severity_frame)
+    table = build_support_table(severity_frame, group_columns=group_columns)
     variables = list(dict.fromkeys(table["variabel"]))
     n_rows, n_cols = _grid_shape(len(variables), max_cols=3)
     fig, axes = plt.subplots(

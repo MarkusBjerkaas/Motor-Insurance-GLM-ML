@@ -60,13 +60,17 @@ from src_severity.severity_scoring import (
 FIT_FAMILY = sm.families.Gamma(sm.families.links.Log())  # log-link for fitting
 GAMMA_POWER = 2
 
-# Kandidatblokkene fra planens register som IKKE inngår i S0 eller C1 (brukes
-# av `plot_oof_residuals` til å sjekke om et utelatt mønster henger igjen).
+# Kandidatblokkene fra planens register som kan være utelatt fra finalisten.
+# `plot_oof_residuals` filtrerer bort blokker som faktisk inngår.
 CANDIDATE_BLOCK_COLUMNS = [
     "municipality_type",
     "circulation_area",
     "performance_hp_per_tonne",
     "seat_category",
+    "fuel_type",
+    "business_type",
+    "payment_frequency",
+    "vehicle_brand_pooled",
 ]
 
 
@@ -106,6 +110,7 @@ def run_year_control(
     fit_kwargs,
     prepare_fold_frames,
     prepare_design_frame,
+    finalist_name,
 ):
     """Fit S0 og finalisten (uten årsledd) på 2022 og prediker begge år.
 
@@ -130,7 +135,7 @@ def run_year_control(
 
     term_lists = {
         "S0": drop_year_term(reference_terms),
-        "C1": drop_year_term(candidate_terms),
+        finalist_name: drop_year_term(candidate_terms),
     }
     predictions, predictions_by_year, rows, models = {}, {}, [], {}
     for name, terms in term_lists.items():
@@ -505,6 +510,7 @@ def run_mix_standardization(
     fit_kwargs,
     prepare_fold_frames,
     prepare_design_frame,
+    finalist_name,
 ):
     """Miksstandardisering: S0 og finalisten fittet separat per år, uten årsledd.
 
@@ -531,7 +537,7 @@ def run_mix_standardization(
     reference = severity_frame  # samme referansepopulasjon og skadevekter begge år
     term_lists = {
         "S0": drop_year_term(reference_terms),
-        "C1": drop_year_term(candidate_terms),
+        finalist_name: drop_year_term(candidate_terms),
     }
 
     fit_rows = []
@@ -575,7 +581,7 @@ def run_mix_standardization(
     fit_table = fit_table.merge(ratio, on="modell")
 
     coverage_columns = sorted(
-        set(_raw_columns(term_lists["S0"]) + _raw_columns(term_lists["C1"]))
+        set(_raw_columns(term_lists["S0"]) + _raw_columns(term_lists[finalist_name]))
     )
     coverage_rows = [
         {
@@ -594,11 +600,12 @@ def run_mix_standardization(
 
 
 def evaluate_time_stop(
-    severity_frame_2023, predictions, reference="S0", candidate="C1"
+    severity_frame_2023, predictions, reference="S0", candidate=None
 ):
     """Planens tidsstoppregel: taper finalisten mot referansen i tidsfolden?
 
-    Kriteriet («Tidsmessig forverring» i stoppregisteret) utløses bare når
+    `candidate` må sendes eksplisitt som finalistens ID. Kriteriet
+    («Tidsmessig forverring» i stoppregisteret) utløses bare når
     ``candidate`` er dårligere enn ``reference`` med MER ENN BÅDE én
     cluster-SE OG 0,5 % av referansens deviance. Bruker
     ``paired_gamma_gain`` med clustere på ``insured_id``.
@@ -607,6 +614,9 @@ def evaluate_time_stop(
     forverring påvist i denne tidsdelingen», ikke som dokumentert
     tidsstabilitet (planen dekker bare én kalenderovergang).
     """
+    if candidate is None:
+        raise ValueError("finalistens kandidat-ID må sendes eksplisitt")
+
     baseline_prediction = predictions[reference]
     candidate_prediction = predictions[candidate]
     rows = baseline_prediction.index  # samme radnøkler for begge modeller
@@ -718,7 +728,7 @@ def plot_oof_residuals(model_id, terms, severity_frame_2023, predictions):
     For å diagnostisere en annen modell: sett ``model_id`` til en annen nøkkel
     i ``predictions`` og ``terms`` til dens (år-frie) termliste, f.eks.
     ``plot_oof_residuals("S0", drop_year_term(S0_TERMS), severity_frame_2023,
-    predictions)`` eller tilsvarende for finalisten ``"C1"``.
+    predictions)`` eller tilsvarende for den eksplisitt angitte finalisten.
 
     Rent diagnostisk: ingen ny modell velges eller forkastes ut fra dette
     plottet — planens kandidatrom er låst før tidskontrollen kjøres.

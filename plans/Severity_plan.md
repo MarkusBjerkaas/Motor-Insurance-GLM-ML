@@ -1,5 +1,10 @@
 # Severity-modellering: låst kandidatsøk og tydelige stoppkriterier
 
+**Protokollversjon 2.1 (2026-09-18).** Denne versjonen utvider den første,
+låste Gamma-seleksjonsrunden med fire forhåndsdefinerte enkeltutfordrere for
+drivstoff, forretningstype, betalingsfrekvens og pool'et bilmerke. Ingen andre deler av
+kandidatrommet eller seleksjonsgrensene åpnes.
+
 ## 1. Formål, beslutninger og faktagrunnlag
 
 Denne planen vedlikeholdes i `plans/Severity_plan.md`. Den eksisterende hovedplanen beholdes som historikk.
@@ -111,14 +116,28 @@ Alle kandidater sammenlignes først mot samme faste baseline. Ingen univariat sc
 | P1 | S0 + lineær ytelse | 10 |
 | P3 | S0 + ytelsesspline df3 | 12 |
 | T1 | S0 + seter kategorisk: `<5`, `=5`, `>5` | 11 |
+| FU1 | S0 + drivstofftype (`D`, `G`, eksplisitt `MISSING`) | 11 |
+| BU1 | S0 + forretningstype | 10 |
+| PF1 | S0 + betalingsfrekvens | 11 |
+| BR1 | S0 + pool'et bilmerke | Fastsettes som 9 + antall ikke-referansenivåer før fitting |
 
 Parametertallene forutsetter de dokumenterte kategorinivåene og full rang. Før første kandidatfit skal implementeringen bygge designmatrisene foldvis og kontrollere kategorinivåer, referansenivåer, kolonneantall og rang mot registeret. Avvik håndteres etter gyldighetsreglene nedenfor; implementeringen skal ikke stille endre parametertall eller utelate nivåer for å få kandidaten til å passe.
 
 Splines bruker `cr(..., df=k, constraints='center')`. Knuter og sentrering læres på treningsfolden og gjenbrukes ved prediksjon. Numerisk imputasjon bruker treningsmedian. Ingen automatisk sletting av rader.
 
-Referansenivåer: produkt `COMP_E`, år 2022, kommune `I`, kjøresone `U`, seter `=5`.
+Referansenivåer: produkt `COMP_E`, år 2022, kommune `I`, kjøresone `U`, seter
+`=5`, drivstoff `D`, forretningstype `NB` og betalingsfrekvens `A`.
+Drivstoff har manglende observasjoner; den allerede låste preprocessingen
+behandler disse som det eksplisitte nivået `MISSING`. Dette er derfor et tredje
+FU1-nivå, ikke numerisk imputasjon eller radbortfall.
+Nivåer og referanser for disse fire feltene skal verifiseres og låses mot
+utviklingsdata før første fit. Referansen for `vehicle_brand_pooled` låses til
+nivået med størst eksponering. Det eksakte BR1-parametertallet låses fra antall
+pool'ede merkenivåer før designkontrollen og skal deretter stemme i alle folder.
 
-Drivstoff, merke, bilalder, betalingsfrekvens og `business_type` inngår ikke i dette kandidatrommet. Erfaring inngår heller ikke i seleksjonen; eventuell senere sensitivitet krever eget avgrenset opplegg. Tidligere lekkasjeeksklusjoner videreføres.
+Merke, bilalder og erfaring inngår ikke i seleksjonen; eventuell senere
+sensitivitet krever eget avgrenset opplegg. Tidligere lekkasjeeksklusjoner
+videreføres.
 
 ### Fem faste gruppefolder
 
@@ -145,7 +164,14 @@ En kandidat må bestå i alle fem folder:
 - Konvergens med samme innstillinger for alle kandidater: maksimalt 200 iterasjoner og toleranse `1e-8`.
 - Ingen usette kategorinivåer ved prediksjon og ingen manglende verdier etter preprocessing.
 
-En valgfri kandidat som ikke består, markeres ugyldig. Ingen ny pooling, kategorisering eller regularisering legges til som redningsforsøk. Svikt i S0 utløser stopp for hele seleksjonsløpet.
+En valgfri kandidat som ikke består, markeres ugyldig og fittes ikke. Hele
+kandidatregisteret og før-fit-designrapporten beholdes for sporbarhet, men
+senere kvalifisering og blokkvalg bruker bare fittede kandidater som også består
+den foldvise gyldighetskontrollen. Ingen ny pooling, kategorisering eller
+regularisering legges til som redningsforsøk. Svikt i S0 utløser stopp for hele
+seleksjonsløpet. I den låste utviklingskontrollen er FU1 ugyldig fordi
+`fuel_type = MISSING` har 39–43 unike personer i treningsfoldene, og BR1 ugyldig
+fordi `CHEVROLET` har 42–50 og fire folder under 50. BU1 og PF1 består.
 
 50-personerskravet gjelder **treningsstøtte**, ikke størrelsen på hvert valideringssegment. Det innføres ingen minstegrense per valideringskategori som kan fjerne observasjoner fra pooled score eller gjøre en ellers gyldig kandidat ugyldig. Rapportér antall skadeår og unike personer per segment, både foldvis og samlet OOF. Små valideringssegmenter merkes som svakt støttet og skal ikke alene begrunne segmentkonklusjoner. De særskilte 100-personerskravene i stoppregisteret gjelder den populasjonen den aktuelle diagnostikken beregnes på: samlet OOF for produkt/desil og hvert enkelt år for segmentdrift.
 
@@ -182,15 +208,24 @@ Asymmetrien er tilsiktet: Forbedringsregelen krever gevinst i minst fire av fem 
 
 Utfør følgende én gang:
 
-1. Kvalifiser alle ni enkeltutfordrere mot S0.
+1. Kvalifiser alle enkeltutfordrere som besto før-fit-porten mot S0.
 2. G2 må bestå forbedringsregelen mot **både S0 og G1**, på de samme fem foldene. G1 må være gyldig etter støtte- og gyldighetskontrollene, men trenger ikke selv å kvalifisere mot S0 for å være sammenligningsgrunnlag. Hvis G1 er ugyldig, kan tilleggsverdien ikke dokumenteres, og G2 kvalifiserer ikke. En gevinst mot G1 kan aldri kompensere for at G2 ikke består kravet mot S0. Begge geografivariabler må dermed begrunne merverdien utover **hver** enkeltvariabel.
-3. Velg ett alternativ i hver blokk: alder, verdi, geografi, ytelse og seter. S0 representerer uendret blokk. Bruk regelen for nesten like resultater.
+3. Velg ett alternativ i hver blokk: alder, verdi, geografi, ytelse, seter,
+   drivstoff, forretningstype, betalingsfrekvens og merke. S0 representerer uendret
+   blokk. Bruk regelen for nesten like resultater. De fire nye kategoriske
+   variablene er separate blokker og kan, hvis de kvalifiserer og vinner
+   blokkens nesten-like-vurdering, inngå i den ene kombinerte kandidaten.
 4. Dersom minst to blokker endres, bygg **én** samlet kandidat C1. Ingen andre kombinasjoner tillates.
 5. C1 må bestå den relevante forbedrings-/forenklingsregelen mot S0 og mot hver valgt enkeltutfordrer. Reglene anvendes ut fra parametertallet i hvert sammenligningspar.
 6. Velg finalist blant S0, kvalifiserte enkeltutfordrere og eventuell kvalifisert C1 med den samme regelen for nesten like resultater.
 7. Dersom C1 forkastes, brukes de allerede kvalifiserte enkeltmodellene som fallback. Ingen oppdeling av C1 og ny kombinasjonsrunde.
 
-Maksimalt **ti faste spesifikasjoner og én kombinert kandidat**, tilsvarende høyst 55 hovedtilpasninger over fem folder. Diagnostiske refittinger nedenfor føres separat i kjøreloggen og kan ikke bli nye kandidater.
+Maksimalt **14 faste spesifikasjoner og én kombinert kandidat**. Dette gir et
+protokollmaksimum på 70 faste hovedtilpasninger og 75 med C1. Faktisk budsjett
+er antallet kandidater som består før-fit-porten multiplisert med fem; i denne
+kontrollen er det 12 gyldige faste spesifikasjoner, altså 60, og 65 dersom C1
+bygges. Diagnostiske refittinger nedenfor føres separat i kjøreloggen og kan
+ikke bli nye kandidater.
 
 0,5 %-grensen og 1-SE-regelen er konservative beslutningsheuristikker, ikke signifikanstester. De gjenbrukes ved enkeltkvalifisering, geografisammenligning, blokkvalg, kombinasjonskontroll og finalistvalg på de samme valideringsobservasjonene. Beslutningene er avhengige; tersklene gir ingen kontrollert samlet feilrate og fjerner ikke seleksjonsoptimismen gjennom hele prosedyren. En eventuell gevinst for vinneren kan derfor overvurdere forbedringen på nye data. Det låste kandidatbudsjettet begrenser søket, men opphever ikke denne begrensningen. Søket er avsluttet også når konklusjonen blir at S0 beholdes.
 
@@ -204,7 +239,9 @@ Lag korte tabeller og plott for:
 - Overskridelser ved 5 000, 7 500 og 10 000 EUR, separat for samlet årskostnad og gjennomsnittsskade.
 - Antall overskridende skadeår, unike personer, kostnadsandel og **overskytende** kostnadsandel. Disse størrelsene må ikke blandes.
 - Null-/nærnullkostnader, beløp under 1 og 10 EUR, og tydelige beløpsklumper.
-- Støtte per produkt, år, geografi, setekategori og skadeantallsgruppe.
+- Støtte per produkt, år, geografi, setekategori, skadeantallsgruppe,
+  `fuel_type`, `business_type`, `payment_frequency` og
+  `vehicle_brand_pooled`.
 
 Kontrollen har funnet 136, 68 og 37 positive skadeår med gjennomsnittsskade over de tre tersklene. Dette er ikke antall individuelle storskader. Ved flere registrerte skader kan én stor skade skjules i gjennomsnittet.
 
@@ -349,7 +386,9 @@ Før hver modelltilpasning dokumenteres modell-likningen og antakelsene i en kor
 
 **Trinn 2 — Diagnostikk før fitting.** Avstem respons, kategoristøtte, små beløp og kostnadskonsentrasjon. Kontroller først kategorinivåer, referansenivåer, parametertall og rang i de foldvise designmatrisene. Avklar eventuelle datastopp før kandidatmodellene kjøres.
 
-**Trinn 3 — Låst Gamma-løp.** Kjør de ti spesifikasjonene og høyst én kombinert kandidat. Lagre alle resultater, inkludert forkastede kandidater, og avslutt seleksjonen etter algoritmen.
+**Trinn 3 — Låst Gamma-løp.** Kjør de 14 faste spesifikasjonene og høyst én
+kombinert kandidat. Lagre alle resultater, inkludert forkastede kandidater, og
+avslutt seleksjonen etter algoritmen.
 
 **Trinn 4 — Diagnostikk etter seleksjon.** Gjennomfør EUR-kalibrering, bootstrap, innflytelse, `N=1`-kontroll, kollinearitets-/fortolkningsdiagnostikk, tidskontroll og miksstandardisering. Utløste faglige stopp behandles før sluttmodellen godkjennes.
 
@@ -373,5 +412,10 @@ Fasen er ferdig når implementeringen er verifisert, seleksjonen kan reprodusere
 
 | Dato | Fase | Endring og begrunnelse |
 |---|---|---|
+| 2026-09-18 | Revidert Gamma-løp fullført | Tolv faste spesifikasjoner ble fittet etter at FU1 og BR1 falt i før-fit-støtteporten; C1 ble bygget og valgt som finalist med lineær alder og kjøresone. Faktisk hovedbudsjett var 65 fits. C1-deviance var 0,724835 mot 0,729006 for S0. Ingen småbeløps-, EUR-, innflytelses-, tids- eller segmentdriftstopp ble utløst. Sluttfitten ble derfor gjennomført med låst C1-formel. Resultatene er utviklingsresultater på de samme foldene som ble brukt til seleksjon. |
+| 2026-09-18 | Før-fit-kontroll før revidert kandidatfit | Før-fit-porten avviste FU1 (`fuel_type = MISSING`, 39–43 unike personer i treningsfoldene) og BR1 (`CHEVROLET`, 42–50 og fire folder under 50). De to valgfrie kandidatene fittes ikke; BU1 og PF1 består. Register og designrapport beholdes, senere seleksjon bruker bare fittede gyldige kandidater, og ingen redningspooling innføres. Faktisk fast budsjett er derfor 60 (protokollmaksimum 70), og 65 dersom C1 bygges. |
+| 2026-09-18 | Implementeringskorreksjon før første kandidatfit | Før-fit-designporten avdekket at FU1 har 11, ikke 10, parametere fordi den låste kategoriske preprocessingen gjør manglende `fuel_type` til et eksplisitt `MISSING`-nivå. Registeret og nivåkontrollen er korrigert uten å endre modellinnhold, preprocessing eller seleksjonsregler. Ingen kandidat ble fittet før avviket ble funnet. |
+| 2026-09-18 | Protokollversjon 2.1 før revidert kandidatfit | Brukeren presiserte og godkjente at alle fire kategoriske felt skal være enkeltutfordrere. Lagt til BR1 (`vehicle_brand_pooled`) som egen blokk. Budsjettet er derfor 14 faste spesifikasjoner = 70 obligatoriske hovedtilpasninger og maksimalt 75 med én C1. Merkets referanse og BR1-parametertall låses fra utviklingsdata før fitting; øvrige regler er uendret. |
+| 2026-09-18 | Protokollversjon 2.0 før revidert kandidatfit | Utvidet det låste kandidatregisteret med FU1 (`fuel_type`), BU1 (`business_type`) og PF1 (`payment_frequency`) som tre separate blokker. Låst referansenivåene D/NB/A og lagt de tre feltene samt `vehicle_brand_pooled` inn i nivå-, støtte- og designkontroll før fitting. Oppdatert registeret til 13 faste spesifikasjoner, 65 obligatoriske hovedtilpasninger og maksimalt 70 med én kombinert kandidat. Modellfamilie, folder, seed, preprocessing, score, seleksjonsgrenser, geografisærregel og stoppkriterier er uendret. `vehicle_brand_pooled` er kontrollfelt, ikke en fjerde ny kandidat, i samsvar med det eksplisitte 13-spesifikasjonsbudsjettet. |
 | 2026-09-18 | Planrevisjon før severity-implementering | Presisert G1s rolle som gyldig, men ikke nødvendigvis kvalifisert referanse for G2; tilsiktet asymmetri i forenklingsregelen; kollinearitetsdiagnostikk uten seleksjonsvirkning; begrensningen ved én kalenderovergang; utestede delkombinasjoner; og seleksjonsoptimisme gjennom hele beslutningskjeden. Flyttet kontroll av parametertall/nivåer eksplisitt foran første fit og avklart treningens støttekrav mot valideringens diagnostiske støtte. Utvidet verifikasjons- og leveransekravene og rettet dokumentets filhenvisning. Kandidatrom, tallgrenser og modellbudsjett er uendret. |
 | 2026-09-18 | Faserevisjon etter diagnostikk | Kandidatrom, terskler og modellbudsjett er uendret. §4 ga C1 som finalist. Bootstrap, kalibrering og innflytelse i §5 utløste ingen stopp. Tidskontrollens pooled-regel utløste heller ikke stopp; «ingen forverring påvist i denne tidsdelingen». Korrigert handoff-feil: 2023-normalisert A/E 1,33/0,74 er ikke år-til-år-drift; korrekt Q = (normalisert A/E 2023)/(normalisert A/E 2022) var ca. 1,02–1,07 for skadeantallsgruppene, og alle 95 % cluster-bootstrap-CI inkluderte 1. Segmentdriftstopp utløses derfor ikke. |

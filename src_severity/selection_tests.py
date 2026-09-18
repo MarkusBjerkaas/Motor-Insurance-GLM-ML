@@ -19,12 +19,65 @@ from src_severity.severity_selection import (
 
 _results = []
 
+FIXED_CANDIDATE_IDS = [
+    "S0",
+    "A1",
+    "A2",
+    "A4",
+    "V3",
+    "G1",
+    "G2",
+    "P1",
+    "P3",
+    "T1",
+    "FU1",
+    "BU1",
+    "PF1",
+    "BR1",
+]
+
+NEW_BLOCKS = {
+    "FU1": "fuel_type",
+    "BU1": "business_type",
+    "PF1": "payment_frequency",
+    "BR1": "vehicle_brand_pooled",
+}
+
 
 def _check(name, condition):
     """Registrerer utfallet av én test og printer status fortløpende."""
     status = "[OK]" if condition else "[FEIL]"
     print(f"{status} {name}")
     _results.append(bool(condition))
+
+
+def test_candidate_register_and_fit_budget():
+    """Registeret og hovedfit-budsjettet verifiseres uten modell/data."""
+    fixed_specs = {name: {"name": name} for name in FIXED_CANDIDATE_IDS}
+    n_folds = 5
+    fixed_budget = len(fixed_specs) * n_folds
+    combined_budget = (len(fixed_specs) + 1) * n_folds
+    _check(
+        "Kandidatregister: 14 faste, unike ID-er inkludert fire nye utfordrere",
+        len(fixed_specs) == 14
+        and len(set(fixed_specs)) == 14
+        and set(NEW_BLOCKS).issubset(fixed_specs),
+    )
+    _check(
+        "Kandidatregister: fire nye utfordrere er separate blokker",
+        len(set(NEW_BLOCKS.values())) == 4
+        and NEW_BLOCKS
+        == {
+            "FU1": "fuel_type",
+            "BU1": "business_type",
+            "PF1": "payment_frequency",
+            "BR1": "vehicle_brand_pooled",
+        },
+    )
+    _check(
+        "Fit-budsjett: 70 faste og maksimalt 75 med én kombinert kandidat",
+        fixed_budget == 70 and combined_budget == 75,
+    )
 
 
 def test_improvement_exactly_on_threshold_fails():
@@ -337,6 +390,7 @@ def run_all():
     """
     _results.clear()
     test_functions = [
+        test_candidate_register_and_fit_budget,
         test_improvement_exactly_on_threshold_fails,
         test_improvement_over_threshold_but_too_few_folds,
         test_improvement_qualifies_with_four_of_five_folds,

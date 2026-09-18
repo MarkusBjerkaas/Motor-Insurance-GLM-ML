@@ -39,7 +39,7 @@
 # | Beslutning | Innhold |
 # |---|---|
 # | CV | Vanlig femfolds gruppe-CV på `insured_id`. Ingen indre CV, ingen ekstra holdout |
-# | Kandidatrom | Baselinen S0 og de ni utfordrerne under er låst |
+# | Kandidatrom | Baselinen S0 og de tretten utfordrerne under er låst |
 # | Seter | Bare inndelingen `<5`, `=5`, `>5` |
 # | Enkelhet | Enklere modeller foretrekkes ved tilnærmet like resultater |
 # | Storskader | Undersøkes diagnostisk. **Ingen** kapping og **ingen** halemodell i dette løpet |
@@ -204,6 +204,40 @@ for frame in (model_frame, severity_frame):
         [frame["seats"].lt(5), frame["seats"].eq(5)], ["<5", "=5"], default=">5"
     )
 
+# Kategorinivåene låses fra utviklingsdata før første fit. De tre små
+# kandidatene har forhåndsbestemte referanser fra frekvensarbeidet; merkets
+# referanse låses til nivået med størst utviklingseksponering.
+EXPECTED_CATEGORY_LEVELS = {
+    "fuel_type": ("D", "G", "MISSING"),
+    "business_type": ("NB", "P"),
+    "payment_frequency": ("A", "Q", "S"),
+    "vehicle_brand_pooled": (*frames["retained_brands"], "OTHER"),
+}
+LOCKED_CATEGORY_REFERENCES = {
+    "fuel_type": "D",
+    "business_type": "NB",
+    "payment_frequency": "A",
+    "vehicle_brand_pooled": development.groupby(
+        "vehicle_brand_pooled", observed=True
+    )["total_exposure"].sum().idxmax(),
+}
+for column, expected_levels in EXPECTED_CATEGORY_LEVELS.items():
+    observed_levels = tuple(
+        sorted(development[column].astype("string").fillna("MISSING").unique())
+    )
+    assert observed_levels == tuple(sorted(expected_levels)), (column, observed_levels)
+for column, reference in LOCKED_CATEGORY_REFERENCES.items():
+    assert reference in EXPECTED_CATEGORY_LEVELS[column], (column, reference)
+
+category_lock_table = pd.DataFrame(
+    {
+        "variabel": list(EXPECTED_CATEGORY_LEVELS),
+        "låste_nivåer": [", ".join(map(str, levels)) for levels in EXPECTED_CATEGORY_LEVELS.values()],
+        "referansenivå": [LOCKED_CATEGORY_REFERENCES[column] for column in EXPECTED_CATEGORY_LEVELS],
+    }
+)
+display(category_lock_table)
+
 # Kontroll mot plans/Severity_plan.md, "Kontrollert nåsituasjon"
 assert len(model_frame) == 55_246
 assert len(severity_frame) == 5_698
@@ -325,16 +359,20 @@ display(fold_table)
 # | P1 | S0 + lineær ytelse | 10 |
 # | P3 | S0 + ytelsesspline df3 | 12 |
 # | T1 | S0 + seter kategorisk `<5`, `=5`, `>5` | 11 |
+# | FU1 | S0 + drivstofftype | 11 |
+# | BU1 | S0 + forretningstype | 10 |
+# | PF1 | S0 + betalingsfrekvens | 11 |
+# | BR1 | S0 + pool'et bilmerke | 9 + antall ikke-referansenivåer |
 #
 # Splines bruker `cr(..., df=k, constraints='center')`. Knuter og sentrering
 # læres på treningsfolden og gjenbrukes ved prediksjon. Numerisk imputasjon
 # bruker treningsmedian. Ingen automatisk sletting av rader.
 #
 # Referansenivåer: produkt `COMP_E`, år 2022, kommune `I`, kjøresone `U`,
-# seter `=5`.
+# seter `=5`, drivstoff `D`, forretningstype `NB` og betalingsfrekvens `A`.
 #
-# **Utenfor kandidatrommet:** drivstoff, merke, bilalder, betalingsfrekvens,
-# `business_type` og kjøreerfaring. Tidligere lekkasjeeksklusjoner videreføres.
+# **Utenfor kandidatrommet:** bilalder og kjøreerfaring. Tidligere
+# lekkasjeeksklusjoner videreføres.
 #
 # Baselinen er **faglig og EDA-forankret, med begrenset direkte kaskolitteratur**.
 # Den er ikke uavhengig av tidligere innsikt fra de samme utviklingsårene.
@@ -353,6 +391,7 @@ BASE_LEVELS = {
     "municipality_type": "I",
     "circulation_area": "U",
     "seat_category": "=5",
+    **LOCKED_CATEGORY_REFERENCES,
 }
 
 
@@ -389,6 +428,10 @@ CANDIDATE_TERMS = {
     "P1": [*S0_TERMS, "performance_hp_per_tonne"],
     "P3": [*S0_TERMS, spline("performance_hp_per_tonne", 3)],
     "T1": [*S0_TERMS, "seat_category"],
+    "FU1": [*S0_TERMS, "fuel_type"],
+    "BU1": [*S0_TERMS, "business_type"],
+    "PF1": [*S0_TERMS, "payment_frequency"],
+    "BR1": [*S0_TERMS, "vehicle_brand_pooled"],
 }
 
 
@@ -429,6 +472,10 @@ PLAN_PARAMETERS = {
     "P1": 10,
     "P3": 12,
     "T1": 11,
+    "FU1": 11,
+    "BU1": 10,
+    "PF1": 11,
+    "BR1": 8 + len(EXPECTED_CATEGORY_LEVELS["vehicle_brand_pooled"]),
 }
 display(
     pd.DataFrame(
@@ -493,14 +540,15 @@ display(
 #
 # ### 2.7 Seleksjonsalgoritmen, utført én gang (S-09)
 #
-# 1. Kvalifiser alle ni enkeltutfordrere mot S0.
+# 1. Kvalifiser alle enkeltutfordrere som besto før-fit-porten mot S0.
 # 2. **Geografisærregelen:** G2 må bestå forbedringsregelen mot **både** S0 og
 #    G1, på de samme fem foldene. G1 må være gyldig, men trenger ikke selv å
 #    kvalifisere mot S0 for å være sammenligningsgrunnlag. Er G1 ugyldig, kan
 #    tilleggsverdien ikke dokumenteres, og G2 kvalifiserer ikke. En gevinst mot
 #    G1 kan aldri kompensere for at G2 ikke består kravet mot S0.
-# 3. Velg ett alternativ i hver blokk (alder, verdi, geografi, ytelse, seter)
-#    med regelen for nesten like resultater. S0 representerer uendret blokk.
+# 3. Velg ett alternativ i hver blokk (alder, verdi, geografi, ytelse, seter,
+#    drivstoff, forretningstype, betalingsfrekvens og merke) med regelen for
+#    nesten like resultater. S0 representerer uendret blokk.
 # 4. Endres minst to blokker, bygg **én** samlet kandidat C1. Ingen andre
 #    kombinasjoner tillates.
 # 5. C1 må bestå den relevante regelen mot S0 **og** mot hver valgt
@@ -510,10 +558,13 @@ display(
 # 7. Forkastes C1, brukes de allerede kvalifiserte enkeltmodellene. Ingen
 #    oppdeling av C1 og ingen ny kombinasjonsrunde.
 #
-# **Budsjett:** høyst ti faste spesifikasjoner og én kombinert kandidat, altså
-# maksimalt 55 hovedtilpasninger over fem folder. Diagnostiske refittinger føres
-# separat og kan ikke bli nye kandidater. Søket er avsluttet også når
-# konklusjonen blir at S0 beholdes.
+# **Budsjett:** Registeret har 14 faste spesifikasjoner, altså et protokollmaksimum
+# på 70 hovedtilpasninger. Bare kandidater som består før-fit-porten fittes; med
+# den låste utviklingskontrollen forventes 12 gyldige spesifikasjoner og dermed
+# 60 faktiske hovedtilpasninger. Med høyst én kombinert kandidat er protokollens
+# maksimum 75 (65 faktisk dersom C1 bygges i denne kjøringen). Diagnostiske
+# refittinger føres separat og kan ikke bli kandidater. Søket er avsluttet også
+# når konklusjonen blir at S0 beholdes.
 
 # %%
 # Seleksjonsreglene (forbedring, forenkling, nesten-like, geografi) er ren
@@ -608,9 +659,9 @@ display(severity_descriptives.plot_small_amounts(severity_frame))
 # ### 3.3 Kategoristøtte
 #
 # Antall unike `insured_id` per nivå i hver kategoriske prediktor i
-# kandidatrommet (produkt, år, kommunetype, kjøresone, setekategori og
-# skadeantallsgruppe), slik at 50-personerskravet i S-07 kan vurderes før
-# første kandidatfit.
+# kandidatrommet (produkt, år, kommunetype, kjøresone, drivstoff, forretningstype,
+# betalingsfrekvens, pool'et merke, setekategori og skadeantallsgruppe), slik at
+# 50-personerskravet i S-07 kan vurderes før første kandidatfit.
 
 # %%
 support_table = severity_descriptives.build_support_table(severity_frame)
@@ -620,10 +671,12 @@ display(support_table.round(4))
 display(severity_descriptives.plot_support(severity_frame))
 
 # %% [markdown]
-# **Konklusjon 3.3.** Ingen nivåer er svakt støttet. Det minste nivået i hele
-# severity-utvalget er `municipality_type = "IS"` med 195 unike personer — godt over
-# 50-personerskravet i S-07. Kandidatrommet kan dermed kjøres slik det er låst,
-# uten sammenslåing av nivåer.
+# **Konklusjon 3.3.** Den samlede støttetabellen viser at enkelte nivåer i de
+# nye kategoriske feltene er små, selv om de øvrige kandidatvariablene har god
+# støtte. Den avgjørende kontrollen er foldvis treningsstøtte i designporten:
+# `fuel_type = MISSING` har 39–43 unike personer og `vehicle_brand_pooled =
+# CHEVROLET` har 42–50 i de fem treningsfoldene. FU1 og BR1 forkastes derfor før
+# fitting. Ingen ny pooling, kategorisering eller annen redningsregel brukes.
 
 # %% [markdown]
 # ### 3.4 Foldvis kontroll av designmatrisene (S-10)
@@ -635,9 +688,31 @@ display(severity_descriptives.plot_support(severity_frame))
 
 # %%
 design_checks = check_candidate_fold_design(
-    severity_specs, severity_frame, cv_folds, prepare_fold_frames, prepare_design_frame
+    severity_specs,
+    severity_frame,
+    cv_folds,
+    prepare_fold_frames,
+    prepare_design_frame,
+    expected_parameters=PLAN_PARAMETERS,
+    locked_references=BASE_LEVELS,
 )
 design_summary = summarize_candidate_design(design_checks)
+
+prefit_checks = [
+    "fem_folder",
+    "kolonneantall_konstant",
+    "alle_folder_full_rang",
+    "alle_folder_støtte_ok",
+    "alle_folder_referansenivåer_tilstede",
+    "alle_folder_referansenivåer_samsvarer",
+    "alle_folder_parametertall_ok",
+]
+design_summary["før_fit_gyldig"] = design_summary[prefit_checks].all(axis=1) & (
+    design_summary["antall_avviste_folder"].eq(0)
+)
+design_summary["før_fit_status"] = np.where(
+    design_summary["før_fit_gyldig"], "godkjent for fit", "forkastet før fit"
+)
 display(design_summary)
 
 # Planens låste parametertall skal stemme eksakt — ingen justering ved avvik.
@@ -648,35 +723,62 @@ for candidate, expected in PLAN_PARAMETERS.items():
         observed_columns[candidate],
         expected,
     )
+prefit_valid_candidates = set(
+    design_summary.loc[design_summary["før_fit_gyldig"], "kandidat"]
+)
+prefit_rejected_candidates = set(design_summary["kandidat"]) - prefit_valid_candidates
+expected_prefit_rejected = {"FU1", "BR1"}
+assert prefit_rejected_candidates == expected_prefit_rejected, (
+    prefit_rejected_candidates,
+)
+assert "S0" in prefit_valid_candidates, (
+    "S0 er ugyldig etter før-fit-kontrollen; seleksjonsløpet stoppes."
+)
+
+# Hele registeret og designrapporten beholdes, men bare godkjente specs sendes
+# til modellfitting. Ingen pooling eller annen redning gjøres for avviste specs.
+severity_specs_for_fit = {
+    name: severity_specs[name]
+    for name in severity_specs
+    if name in prefit_valid_candidates
+}
+assert len(severity_specs) * len(cv_folds) == 70
+assert len(severity_specs_for_fit) * len(cv_folds) == 60
 
 # %% [markdown]
-# **Konklusjon 3.4.** Alle ti kandidater treffer planens parametertall eksakt
-# (9/7/8/10/11/8/10/10/12/11 kolonner inkludert intercept), har full rang i alle
-# fem folder, og ingen fold avvises på grunn av kategorinivåer som mangler i
-# treningsdelen. Den minste kategoristøtten innenfor en treningsfold er 145 unike
-# personer (`municipality_type = "IS"`); G1 har 1 239 fordi den ikke bruker
-# `municipality_type` i det hele tatt. Gyldighetsporten S-07/S-10 er dermed
-# passert **før** første fit, og alle ti kandidatene går inn i det låste løpet.
+# **Konklusjon 3.4.** Alle 14 designene hadde konstant og korrekt
+# kolonneantall (7–26), full rang, låste referanser og fem komplette folder.
+# FU1 ble likevel forkastet før fit fordi `fuel_type = MISSING` bare hadde
+# 39–43 unike personer i treningsfoldene. BR1 ble også forkastet: `CHEVROLET`
+# hadde 42–50 personer og lå under 50-kravet i fire folder. De øvrige tolv
+# spesifikasjonene besto porten; ingen pooling eller annen redning ble forsøkt.
 
 # %% [markdown]
 # ## 4. Låst Gamma-løp
 #
 # Seleksjonsalgoritmen (S-09) kjøres nå én gang. Resultatene fra alle kandidater
-# lagres, også de forkastede, og søket avsluttes etter algoritmen — også dersom
-# konklusjonen blir at S0 beholdes. Budsjettet er ti faste spesifikasjoner pluss
-# høyst én kombinert kandidat, altså maksimalt 55 hovedtilpasninger.
+# lagres, og søket avsluttes etter algoritmen — også dersom konklusjonen blir at
+# S0 beholdes. Kandidater forkastet i før-fit-porten står i designrapporten, men
+# fittes ikke. Budsjettet er 70/75 som protokollmaksimum; faktisk budsjett er
+# antallet godkjente faste specs ganger fem, pluss eventuell C1.
 
 # %% [markdown]
-# ### 4.1 Kjøring av de ti spesifikasjonene
+# ### 4.1 Kjøring av de godkjente faste spesifikasjonene
 
 # %%
 # Hver kandidat kjøres én gang over de fem låste foldene. fold_hook lagrer i
 # tillegg prediksjoner for hele modellpopulasjonen (S-11), til bruk i seksjon 5.
 full_population_hook = make_full_population_hook(model_frame, severity_frame, cv_folds)
 severity_results, fits_used = run_candidates(
-    severity_specs, severity_frame, cv_folds, FIT_SETTINGS, fold_hook=full_population_hook
+    severity_specs_for_fit,
+    severity_frame,
+    cv_folds,
+    FIT_SETTINGS,
+    fold_hook=full_population_hook,
 )
-print(f"hovedtilpasninger brukt: {fits_used} av budsjettet 55")
+assert fits_used == len(severity_specs_for_fit) * len(cv_folds)
+assert fits_used == 60, fits_used
+print(f"hovedtilpasninger brukt: {fits_used} av protokollmaksimum 70")
 
 # %%
 score_table = build_score_table(severity_results, severity_frame, PLAN_PARAMETERS)
@@ -684,7 +786,14 @@ display(score_table.round(6))
 
 # Gyldighetskravene i S-07: konvergens i alle folder og OOF-prediksjon på alle
 # 5 698 skadeårene. Kandidater som faller her, kan ikke sammenlignes videre.
+# Før-fit-forkastede kandidater er ikke med i denne tabellen og kan derfor ikke
+# komme inn i senere kvalifisering eller blokkvalg.
 valid_candidates = set(score_table.loc[score_table["gyldig"], "ID"])
+if "S0" not in valid_candidates:
+    raise RuntimeError(
+        "S0 er ugyldig etter femfoldskontrollen; seleksjonsløpet stoppes "
+        "uten parvise sammenligninger eller finalistvalg."
+    )
 assert valid_candidates, "ingen gyldige kandidater"
 
 # %%
@@ -692,12 +801,15 @@ fold_deviance_table = build_fold_deviance_table(severity_results)
 display(fold_deviance_table.round(6))
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 4.1.** Fyll inn gyldighet, konvergens, OOF-dekning,
-# > scoreintervall og foldvariasjon etter at det utvidede kandidatregisteret er
-# > låst og hele løpet er kjørt på nytt.
+# **Konklusjon 4.1.** Alle tolv fittede spesifikasjoner konvergerte i samtlige
+# folder og ga OOF-prediksjon for alle 5 698 skadeår. Pooled deviance lå fra
+# 0,725493 (G1) til 0,730374 (P3); foldscorene spente fra 0,663593 til
+# 0,770581. S0 var gyldig med 0,729006 og foldintervall 0,668240–0,766679.
+# FU1 og BR1 står i designrapporten som før-fit-forkastet og har derfor ingen
+# score.
 
 # %% [markdown]
-# ### 4.2 Kvalifisering av de ni enkeltutfordrerne mot S0
+# ### 4.2 Kvalifisering av de godkjente enkeltutfordrerne mot S0
 
 # %%
 challengers = [name for name in CANDIDATE_TERMS if name != "S0" and name in valid_candidates]
@@ -708,9 +820,13 @@ selection_table = build_selection_table(qualification_records)
 display(selection_table.round(6))
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 4.2.** Fyll inn hvilke enkeltutfordrere som
-# > kvalifiserer, hvilken regel de består, tersklene og foldfordelingen etter den
-# > reviderte kjøringen.
+# **Konklusjon 4.2.** A1, A2 og G1 kvalifiserte etter forenklingsregelen. A1
+# og A2 hadde henholdsvis gevinst 0,000736 og 0,000545, med bindende
+# SE-grenser 0,000867 og 0,000334; begge forbedret 2/5 folder. G1 hadde gevinst
+# 0,003512, bindende SE 0,001929 og forbedret 4/5 folder. BU1 forbedret 4/5
+# folder, men gevinsten 0,001446 nådde ikke 0,5 %-kravet 0,003645. PF1 tapte
+# 0,000235 og forbedret 2/5; heller ikke A4, V3, G2, P1, P3 eller T1
+# kvalifiserte. FU1 og BR1 var allerede forkastet på støtte.
 
 # %% [markdown]
 # ### 4.3 Geografisærregelen: G2 mot både S0 og G1
@@ -734,11 +850,17 @@ def rule_arguments(reference, candidate):
     }
 
 
-geography = apply_geography_rule(
-    rule_arguments("S0", "G2"),
-    rule_arguments("G1", "G2"),
-    g1_valid="G1" in valid_candidates,
-)
+if "G2" in valid_candidates:
+    geography = apply_geography_rule(
+        rule_arguments("S0", "G2"),
+        rule_arguments("G1", "G2") if "G1" in valid_candidates else None,
+        g1_valid="G1" in valid_candidates,
+    )
+else:
+    geography = {
+        "kvalifiserer": False,
+        "begrunnelse": "G2 er ugyldig og forkastes før geografisærregelen.",
+    }
 print(geography["begrunnelse"])
 
 # %%
@@ -754,14 +876,16 @@ if geography["kvalifiserer"]:
 print("kvalifiserte enkeltutfordrere:", sorted(qualified) or "ingen")
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 4.3.** Fyll inn utfallet av geografisærregelen mot
-# > både S0 og G1 etter den reviderte kjøringen.
+# **Konklusjon 4.3.** G2 kvalifiserte ikke mot S0 og besto heller ikke kravet
+# mot G1. Den kunne derfor ikke overstyre geografiblokken. G1 var gyldig og
+# forble det eneste kvalifiserte geografialternativet.
 
 # %% [markdown]
 # ### 4.4 Blokkvalg
 #
-# Ett alternativ velges i hver av de fem blokkene (alder, verdi, geografi, ytelse,
-# seter). S0 representerer uendret blokk og er alltid med som alternativ, slik at
+# Ett alternativ velges i hver av de ni blokkene (alder, verdi, geografi, ytelse,
+# seter, drivstoff, forretningstype, betalingsfrekvens og merke). S0 representerer
+# uendret blokk og er alltid med som alternativ, slik at
 # en blokk bare endres når en kvalifisert utfordrer også vinner nesten-like-regelen.
 
 # %%
@@ -771,6 +895,10 @@ BLOCKS = {
     "geografi": ["G1", "G2"],
     "ytelse": ["P1", "P3"],
     "seter": ["T1"],
+    "drivstoff": ["FU1"],
+    "forretningstype": ["BU1"],
+    "betaling": ["PF1"],
+    "merke": ["BR1"],
 }
 
 block_choices = {}
@@ -787,8 +915,12 @@ changed_blocks = {b: c for b, c in block_choices.items() if c != "S0"}
 print("endrede blokker:", changed_blocks or "ingen")
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 4.4.** Fyll inn blokkvalgene, hvilke blokker som
-# > endres, og eventuelle resultater nær beslutningsgrensene etter ny kjøring.
+# **Konklusjon 4.4.** Aldersblokken valgte A1 blant S0/A1/A2 fordi alle tre var
+# nesten like og A1 hadde færrest parametere. Geografiblokken valgte G1, som
+# alene lå innenfor begge nesten-like-grensene rundt blokkens beste score.
+# Verdi, ytelse, seter, drivstoff, forretningstype, betaling og merke beholdt
+# S0. De to endrede blokkene var dermed lineær alder og kjøresone i stedet for
+# kommunetype.
 
 # %% [markdown]
 # ### 4.5 Kombinert kandidat C1
@@ -816,29 +948,49 @@ def combine_terms(chosen):
 candidate_parameters = dict(PLAN_PARAMETERS)
 chosen_challengers = sorted(set(changed_blocks.values()))
 build_c1 = len(changed_blocks) >= 2
+c1_pre_fit_valid = False
 print("C1 bygges" if build_c1 else "C1 bygges ikke: færre enn to blokker endret")
 
 # %%
 if build_c1:
     c1_terms = combine_terms(chosen_challengers)
+    c1_expected_parameters = PLAN_PARAMETERS["S0"] + sum(
+        PLAN_PARAMETERS[name] - PLAN_PARAMETERS["S0"] for name in chosen_challengers
+    )
+    candidate_parameters["C1"] = c1_expected_parameters
     severity_specs["C1"] = glm_spec(
         "C1", c1_terms, "average_severity", severity_frame, GAMMA_FAMILY,
         "property_claims", GAMMA_POWER, required_columns=raw_columns(c1_terms),
         base_level_overrides=BASE_LEVELS,
     )
-    # Samme gyldighetsport som de ti faste kandidatene, før C1 fittes.
+    # Samme gyldighetsport som de 14 faste kandidatene, før C1 fittes.
     c1_design = summarize_candidate_design(
         check_candidate_fold_design(
             {"C1": severity_specs["C1"]}, severity_frame, cv_folds,
-            prepare_fold_frames, prepare_design_frame,
+            prepare_fold_frames,
+            prepare_design_frame,
+            expected_parameters={"C1": c1_expected_parameters},
+            locked_references=BASE_LEVELS,
         )
     )
-    candidate_parameters["C1"] = int(c1_design["kolonner"].iloc[0])
     display(c1_design)
     print("C1-termer:", c1_terms)
+    c1_pre_fit_valid = bool(
+        len(c1_design) == 1
+        and c1_design["fem_folder"].iloc[0]
+        and c1_design["kolonneantall_konstant"].iloc[0]
+        and c1_design["alle_folder_full_rang"].iloc[0]
+        and c1_design["alle_folder_støtte_ok"].iloc[0]
+        and c1_design["alle_folder_referansenivåer_tilstede"].iloc[0]
+        and c1_design["alle_folder_referansenivåer_samsvarer"].iloc[0]
+        and c1_design["alle_folder_parametertall_ok"].iloc[0]
+        and c1_design["antall_avviste_folder"].iloc[0] == 0
+    )
+    if not c1_pre_fit_valid:
+        print("C1 forkastes før fit: designmatrisen besto ikke før-fit-porten")
 
 # %%
-if build_c1:
+if build_c1 and c1_pre_fit_valid:
     c1_results, c1_fits = run_candidates(
         {"C1": severity_specs["C1"]}, severity_frame, cv_folds, FIT_SETTINGS,
         fold_hook=full_population_hook,
@@ -846,11 +998,16 @@ if build_c1:
     severity_results.update(c1_results)
     fits_used += c1_fits
     display(build_score_table(severity_results, severity_frame, candidate_parameters))
-    print(f"hovedtilpasninger brukt totalt: {fits_used} av budsjettet 55")
-    assert fits_used <= 55, fits_used
+    actual_budget_max = len(severity_specs_for_fit) * len(cv_folds) + len(cv_folds)
+    print(
+        f"hovedtilpasninger brukt totalt: {fits_used} "
+        f"av faktisk maks {actual_budget_max} (protokollmaksimum 75)"
+    )
+    assert fits_used <= actual_budget_max, fits_used
+    assert fits_used <= 75, fits_used
 
 # %%
-if build_c1:
+if build_c1 and c1_pre_fit_valid:
     # C1 må bestå regelen mot S0 OG mot hver valgt enkeltutfordrer.
     c1_records = qualify_against(
         severity_results, severity_frame, "S0", ["C1"], candidate_parameters, qualifies,
@@ -869,9 +1026,12 @@ else:
 print("C1 kvalifiserer:", c1_qualifies)
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 4.5.** Fyll inn den kombinerte kandidatens termer,
-# > parametertall, gyldighet, parvise sammenligninger og faktisk brukt
-# > modellbudsjett etter ny kjøring.
+# **Konklusjon 4.5.** C1 kombinerte produkt, år, lineær log-bilverdi, lineær
+# føreralder og kjøresone. Designet hadde seks parametere, full rang og minste
+# foldstøtte 1 239. Pooled deviance var 0,724835. C1 kvalifiserte mot S0
+# (gevinst 0,004170; SE 0,002203), A1 (0,003434; 0,001844) og G1
+# (0,000658; 0,000649) etter den parvise forenklingsregelen. Det ble brukt 65
+# hovedfits: 60 faste og fem for C1, mot protokollmaksimum 75.
 
 # %% [markdown]
 # ### 4.6 Finalist
@@ -892,18 +1052,27 @@ print(f"Finalist: {FINALIST} — {finalist_choice['begrunnelse']}")
 print("Nesten like:", finalist_choice["nesten_like"])
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 4.6.** Fyll inn finalist, formel, parametertall,
-# > nesten-like-vurdering, gevinst mot S0 og en nøktern faglig tolkning etter at
-# > det utvidede kandidatløpet er avsluttet.
+# **Konklusjon 4.6.** C1 ble finalist og var alene innenfor både én parvis SE
+# og 0,5 % av beste score. G1 lå bare 0,000658 bak, men dette var marginalt mer
+# enn parvis SE 0,000649; A2 lå 0,500204 % bak og falt så vidt utenfor
+# prosentgrensen. C1s gevinst mot S0 var 0,004170, tilsvarende 0,57 % av S0s
+# deviance. Dette er en utviklingsgevinst etter seleksjon på de samme foldene,
+# ikke en uavhengig vurdering av hele seleksjonsprosedyren.
 
 # %% [markdown]
 # ### 4.7 Resultater fra det reviderte kandidatløpet
 #
 # Denne seksjonen skal skrives etter den nye kjøringen. Den skal samle den
 # endelige seleksjonskonklusjonen og forklare hvordan drivstoff,
-# `business_type` og betalingsfrekvens påvirket kandidatvalget. Ingen tidligere
-# finalist eller score skal kopieres inn uten at den er reprodusert av den
-# reviderte protokollen.
+# `business_type`, betalingsfrekvens og pool'et bilmerke påvirket
+# kandidatvalget. Ingen tidligere finalist eller score skal kopieres inn uten
+# at den er reprodusert av den reviderte protokollen.
+#
+# **Samlet seleksjonsresultat.** De fire nye feltene endret ikke finalisten:
+# FU1 og BR1 ble forkastet før fit på støtte, mens BU1 og PF1 var gyldige, men
+# kvalifiserte ikke mot S0. Det låste løpet valgte i stedet C1 med lineær alder
+# og kjøresone. Bare denne ene kombinasjonen ble prøvd; ingen ny kandidat- eller
+# delkombinasjonsrunde ble åpnet etter resultatinnsyn.
 
 # %% [markdown]
 # ## 5. Diagnostikk etter seleksjon
@@ -911,10 +1080,10 @@ print("Nesten like:", finalist_choice["nesten_like"])
 # %%
 # Finalistvalget er avsluttet: diagnostikken bruker bare disse faste OOF-
 # prediksjonene og åpner ikke kandidatregisteret på nytt.
-assert FINALIST == "C1"
+FINALIST_LABEL = FINALIST if FINALIST != "S0" else "S0_finalist"
 FIXED_OOF_PREDICTIONS = {
-    name: severity_results[name]["oof"].reindex(severity_frame.index)
-    for name in ("S0", "C1")
+    "S0": severity_results["S0"]["oof"].reindex(severity_frame.index),
+    FINALIST_LABEL: severity_results[FINALIST]["oof"].reindex(severity_frame.index),
 }
 assert all(pred.notna().all() for pred in FIXED_OOF_PREDICTIONS.values())
 
@@ -932,6 +1101,10 @@ CALIBRATION_SEGMENTS = [
     "year",
     "municipality_type",
     "circulation_area",
+    "fuel_type",
+    "business_type",
+    "payment_frequency",
+    "vehicle_brand_pooled",
 ]
 calibration_ae = severity_calibration.build_ae_table(
     severity_frame, FIXED_OOF_PREDICTIONS, CALIBRATION_SEGMENTS
@@ -969,9 +1142,11 @@ display(
 display(severity_calibration.plot_calibration(calibration_deciles, calibration_ae))
 
 # %% [markdown]
-# **Konklusjon 5.1.** A/E skal vurderes mot 1,0, ikke mot en ny seleksjonsregel.
-# Desilene og segmentene over viser om modellens nivå er rimelig fordelt, mens
-# `N=1` må tolkes med forbehold fordi det er et selektert skadeårssegment.
+# **Konklusjon 5.1.** Total OOF A/E var 1,0003 for C1 og 1,0006 for S0;
+# produktnivåene lå også nær 1. C1s S0-desiler spente fra 0,9203 i desil 9 til
+# 1,0841 i desil 5. Desil 9s intervall utelukket 1, men punktet var innenfor
+# materialitetsbåndet 0,80–1,20, så dette utløste ikke EUR-stopp. `N=1` er et
+# selektert skadeårssegment og ikke nødvendigvis én fysisk hendelse.
 
 # %% [markdown]
 # ### 5.2 Beløpsklasser og foldstabilitet
@@ -994,7 +1169,7 @@ display(contribution_table.round(4))
 
 # %%
 stability_table = severity_calibration.build_fold_coefficient_table(
-    severity_results, ["S0", "C1"]
+    severity_results, list(dict.fromkeys(["S0", FINALIST]))
 )
 correlation_input = severity_frame.dropna(
     subset=["driver_age", "log_vehicle_value"]
@@ -1011,8 +1186,15 @@ display(stability_table.round(4))
 print(f"Vektet korr(driver_age, log_vehicle_value) = {driver_value_correlation:.6f}")
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 5.2.** Fyll inn foldstabilitet, relevante numeriske
-# > korrelasjoner og fortolkningsbegrensninger for den nye finalisten.
+# **Konklusjon 5.2.** C1s produkt-, års- og bilverdieffekter hadde samme fortegn
+# i alle folder. Kjøresonerelativiteten var også stabil i retning
+# (koeffisient 0,0699–0,1321), mens lineær alder lå nær null
+# (-0,0019–0,0000) og er svakt identifisert som egen effekt. Skadevektet
+# korrelasjon mellom alder og log-bilverdi var bare -0,0129, så disse to
+# numeriske leddene viser ingen materiell lineær samvariasjon. Beløp ≤1 EUR sto
+# for 0,28 % av C1-deviancen og under 0,1 % av kostnaden; småbeløpsstoppet ble
+# ikke utløst. Foldspredningen beskriver likevel bare fem tilpasninger og gjør
+# ikke koeffisientene kausale.
 
 # %% [markdown]
 # ### 5.3 Cluster-bootstrap og EUR-stopp
@@ -1039,7 +1221,12 @@ bootstrap_deviance = severity_bootstrap.bootstrap_deviance_ci(
     severity_frame, FIXED_OOF_PREDICTIONS, n_draws=2000, seed=410
 )
 bootstrap_gain = severity_bootstrap.bootstrap_gain_ci(
-    severity_frame, FIXED_OOF_PREDICTIONS, "S0", "C1", n_draws=2000, seed=410
+    severity_frame,
+    FIXED_OOF_PREDICTIONS,
+    "S0",
+    FINALIST_LABEL,
+    n_draws=2000,
+    seed=410,
 )
 
 # %%
@@ -1070,7 +1257,8 @@ deviance_report = bootstrap_deviance.assign(
 ]
 gain_report = pd.DataFrame(
     [{
-        "mål": "Gevinst S0-C1", "modell": "C1", "variabel": "Totalt",
+        "mål": f"Gevinst S0-{FINALIST}", "modell": FINALIST_LABEL,
+        "variabel": "Totalt",
         "nivå": "Totalt", "punkt": bootstrap_gain["punkt"],
         "lav": bootstrap_gain["lav"], "høy": bootstrap_gain["høy"],
         "CI_utelukker_1": pd.NA,
@@ -1080,10 +1268,13 @@ display(pd.concat([deviance_report, gain_report, bootstrap_report], ignore_index
 print("EUR-stopp utløst:", bool(bootstrap_stops["utløst"].any()))
 
 # %% [markdown]
-# **Konklusjon 5.3.** Intervallene over er betinget på de faste OOF-
-# prediksjonene og dokumenterer derfor ikke parameterusikkerhet eller
-# urepresenterte haler. EUR-stopp vurderes først når både materiell avstand fra
-# 1,0 og et intervall som utelukker 1,0 er til stede.
+# **Konklusjon 5.3.** Med 2 000 cluster-trekk var C1-deviancen 0,724835
+# (95 % intervall 0,681412–0,769252), og gevinsten mot S0 var 0,004170
+# (0,000126–0,008603). Total C1 A/E var 1,000254
+# (0,968923–1,032553). Ingen total-, produkt- eller desilkombinasjon oppfylte
+# både materialitets- og intervallkravet; EUR-stoppet ble ikke utløst.
+# Intervallene er betinget på faste OOF-prediksjoner og omfatter verken
+# parameterusikkerhet, seleksjonsprosessen eller urepresenterte haler.
 
 # %% [markdown]
 # ### 5.4 Innflytelse fra de fem dyreste personene
@@ -1099,7 +1290,10 @@ print("EUR-stopp utløst:", bool(bootstrap_stops["utløst"].any()))
 # preprocessing og modellformel er ellers uendret.
 
 # %%
-influence_specs = {name: severity_specs[name] for name in ("S0", "C1")}
+influence_specs = {
+    "S0": severity_specs["S0"],
+    FINALIST_LABEL: severity_specs[FINALIST],
+}
 influence_sensitivity = severity_influence.run_influence_sensitivity(
     influence_specs,
     severity_frame,
@@ -1126,9 +1320,12 @@ print("Innflytelsesstopp utløst:", bool(influence_stops["utløst"].any()))
 display(severity_influence.plot_influence(influence_table, top_persons))
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 5.4.** Fyll inn endringen i forventet kostnad og om
-# > innflytelsesstoppet utløses for den nye finalisten. Behold forbeholdet om at
-# > dette bare er den låste topp-fem-personer-kontrollen.
+# **Konklusjon 5.4.** Når de fem dyreste personene ble fjernet fra hver
+# treningsfold, falt C1s poolede forventede kostnad 1,58 %. Produktendringene var
+# -1,72 % for COMP_E og -1,31 % for COMP_N, klart innenfor grensene 5 % totalt
+# og 10 % per produkt. Innflytelsesstoppet ble ikke utløst. Dette dokumenterer
+# bare den låste topp-fem-kontrollen, ikke generell robusthet mot alle
+# innflytelsesrike observasjoner.
 
 # %% [markdown]
 # ### 5.5 Årskontroll 2022 → 2023
@@ -1140,13 +1337,14 @@ display(severity_influence.plot_influence(influence_table, top_persons))
 
 # %%
 time_control = severity_time.run_year_control(
-    severity_specs["C1"]["x"],
+    severity_specs[FINALIST]["x"],
     severity_specs["S0"]["x"],
     BASE_LEVELS,
     severity_frame,
     FIT_SETTINGS,
     prepare_fold_frames,
     prepare_design_frame,
+    finalist_name=FINALIST_LABEL,
 )
 
 # %%
@@ -1156,14 +1354,17 @@ time_level_shift = severity_time.build_level_shift_table(
     time_2023, time_control["predictions"], time_2022
 )
 time_stop = severity_time.evaluate_time_stop(
-    time_2023, time_control["predictions"]
+    time_2023,
+    time_control["predictions"],
+    reference="S0",
+    candidate=FINALIST_LABEL,
 )
 time_score_table = time_control["scores"].merge(
     time_level_shift[["modell", "A_E", "severity_2022", "severity_2023"]],
     on="modell",
 )
 time_score_table = time_score_table.assign(
-    tidsgevinst_S0_minus_C1=time_stop["gevinst"],
+    tidsgevinst_S0_minus_finalist=time_stop["gevinst"],
     SE_cluster=time_stop["SE_cluster"],
     terskel_0_5_prosent=time_stop["terskel_relativ"],
     tidsstopp_utløst=time_stop["utløst"],
@@ -1197,10 +1398,12 @@ assert not time_segment_drift["utløst"].any()
 display(time_segment_drift.round(4))
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 5.5b.** Fyll inn normalisert A/E-forhold $Q$,
-# > bootstrapintervaller, støtte og utfallet av segmentdriftstoppet etter ny
-# > kjøring. `N=1` skal fortsatt omtales som et selektert utvalg og ikke
-# > nødvendigvis én fysisk hendelse.
+# **Konklusjon 5.5b.** For C1 lå normalisert A/E-forhold $Q$ fra 0,9935
+# (COMP_N; 95 % intervall 0,9034–1,0851) til 1,0687 (`N≥4`;
+# 0,9834–1,1635). Alle produkt- og skadeantallssegmenter hadde minst 202
+# personer i 2022 og 622 i 2023, alle intervaller inkluderte 1, og ingen endring
+# oversteg 20 %. Segmentdriftstoppet ble ikke utløst. `N=1` er fortsatt et
+# selektert skadeårssegment, ikke nødvendigvis én fysisk hendelse.
 
 # %% [markdown]
 # #### 5.5c Årskostnad
@@ -1221,13 +1424,14 @@ display(year_cost.round(4))
 
 # %%
 mix_standardization = severity_time.run_mix_standardization(
-    severity_specs["C1"]["x"],
+    severity_specs[FINALIST]["x"],
     severity_specs["S0"]["x"],
     BASE_LEVELS,
     severity_frame,
     FIT_SETTINGS,
     prepare_fold_frames,
     prepare_design_frame,
+    finalist_name=FINALIST_LABEL,
 )
 display(mix_standardization["kostnad"].round(6))
 
@@ -1252,10 +1456,16 @@ time_segment_ae_2023 = time_segment_ae.loc[time_segment_ae["year"].eq(2023)]
 display(severity_time.plot_year_control(time_segment_ae_2023, time_level_shift))
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 5.5.** Fyll inn pooled tidsresultat, globalt
-# > nivåskift, miksstandardisering, dekning og begge tidsstoppvurderingene.
-# > Konklusjonen må fortsatt presisere at én kalenderovergang ikke dokumenterer
-# > tidsstabilitet.
+# **Konklusjon 5.5.** I 2022→2023-kontrollen var deviance 0,708886 for S0 og
+# 0,709531 for C1. C1s tap 0,000645 var mindre enn både cluster-SE 0,003315 og
+# 0,5 %-grensen 0,003544; ingen forverring ble påvist i denne tidsdelingen.
+# C1s 2023-A/E var 0,9163, i tråd med det globale fallet i observert severity
+# fra 939,78 til 846,17 EUR. Miksstandardiseringen ga forhold 0,9172 mellom
+# 2023- og 2022-fitten på samme referansepopulasjon (S0: 0,9168). Høyeste andel
+# utenfor treningsårets kovariatområde var 0,123 % for alder; kategorisk dekning
+# var komplett. Verken tids- eller segmentdriftstoppet ble utløst. Én
+# kalenderovergang dokumenterer likevel ikke generell tidsstabilitet eller
+# identifisert skadeinflasjon.
 
 # %% [markdown]
 # ### 5.6 Residualdiagnostikk og fortolkningsbegrensning
@@ -1265,29 +1475,55 @@ display(severity_time.plot_year_control(time_segment_ae_2023, time_level_shift))
 # eller automatisk fjerning av variabler.
 
 # %%
-time_c1_terms = severity_time.drop_year_term(severity_specs["C1"]["x"])
+time_finalist_terms = severity_time.drop_year_term(severity_specs[FINALIST]["x"])
 display(
     severity_time.plot_oof_residuals(
-        "C1", time_c1_terms, time_2023, time_control["predictions"]
+        FINALIST_LABEL,
+        time_finalist_terms,
+        time_2023,
+        time_control["predictions"],
     )
 )
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 5.6.** Beskriv residualmønstre og
-# > fortolkningsbegrensninger for den nye finalisten uten å åpne et nytt
-# > kandidatsøk. Svakt støttede segmenter skal ikke alene bære en konklusjon.
+# **Konklusjon 5.6.** 2023-residualene var i hovedsak sentrert nær null, men
+# hadde en tydelig høyre hale med flere store positive avvik og noen store
+# negative avvik. Det var ingen skarp gjenværende kurvatur mot alder,
+# log-bilverdi eller predikert severity, men spredningen var ujevn. Produkt og
+# kjøresone hadde relativt like sentrale fordelinger. Utelatte kategorier viste
+# enkelte nivåforskjeller og ekstreme observasjoner, særlig blant merker, men
+# de svakt støttede nivåene kan ikke bære egne konklusjoner. Diagnostikken åpner
+# derfor ikke et nytt kandidatsøk eller nye terskler.
 
 # %% [markdown]
 # ## 6. Sluttfit og leveranse
 #
-# > **RESULTATPLASSHOLDER 6.** Etter den reviderte seleksjonen skal denne cellen
-# > inneholde finalistens eksplisitte Gamma/log-likning, alle referansenivåer og
-# > en kort intuitiv forklaring. Sluttfitten skal fortsatt bruke alle 5 698
-# > positive skadeår, samme preprocessing og cluster-robuste standardfeil på
-# > `insured_id`; S0 beholdes som dokumentert referanse.
+# Finalisten er C1:
+#
+# $$
+# \bar X_i\sim\operatorname{Gamma}(\mu_i,\phi/N_i),
+# $$
+#
+# $$
+# \log(\mu_i)=\beta_0
+# +\beta_1 I(\mathrm{COMP\_N}_i)
+# +\beta_2 I(\mathrm{year}_i=2023)
+# +\beta_3 I(\mathrm{circulation\_area}_i=R)
+# +\beta_4\log(\mathrm{vehicle\_value}_i)
+# +\beta_5\mathrm{driver\_age}_i.
+# $$
+#
+# Referansene er `COMP_E`, 2022 og urban kjøresone `U`. Modellen sier
+# intuitivt at forventet registrert kostnad per skade justeres multiplikativt
+# for produkt, år, kjøresone, bilverdi og en lineær alderseffekt. Sluttfitten
+# bruker alle 5 698 positive skadeår, skadeantallsvekter og cluster-robuste
+# standardfeil på `insured_id`; S0 beholdes som dokumentert referanse.
 
 # %%
-FINAL_SPECS = {"C1": severity_specs[FINALIST], "S0": severity_specs["S0"]}
+FINAL_SPECS = {
+    FINALIST_LABEL: severity_specs[FINALIST],
+    "S0": severity_specs["S0"],
+}
 
 final_models = {}
 for name, spec in FINAL_SPECS.items():
@@ -1321,16 +1557,27 @@ final_coefficients = pd.concat(
 display(final_coefficients.round(4))
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 6 — tolkning.** Tolk den nye finalistens viktigste
-# > relativiteter og intervaller etter sluttfit. Skill assosiasjon fra kausalitet
-# > og registrert `property_incurred` fra ultimate skadebeløp.
+# **Tolkning.** Alt annet likt var COMP_N assosiert med 33,0 % lavere severity
+# enn COMP_E (relativitet 0,6705; 95 % intervall 0,6311–0,7123), og 2023 med
+# 8,1 % lavere nivå enn 2022 (0,9186; 0,8620–0,9788). Rural kjøresone lå
+# 10,9 % over urban (1,1095; 1,0384–1,1855). Koeffisienten 0,1994 på
+# log-bilverdi betyr omtrent 0,20 % høyere forventet severity ved 1 % høyere
+# bilverdi. Alderseffekten var -0,11 % per år, men intervallet
+# 0,9965–1,0013 inkluderte ingen effekt. Dette er justerte assosiasjoner, ikke
+# kausale virkninger, og responsen er registrert `property_incurred`, ikke
+# dokumentert ultimate skadebeløp.
 
 # %% [markdown]
-# > **RESULTATPLASSHOLDER 6 — begrensninger.** Skriv begrensningsavsnittet på
-# > nytt etter det utvidede løpet. Det skal minst dekke enkelhetspreferansen,
-# > utestede kombinasjoner, seleksjonsoptimisme, én kalenderovergang,
-# > korrelerte blokker, svake segmenter, registrert `incurred` og at
-# > bootstrapen er betinget på faste OOF-prediksjoner.
+# **Begrensninger.** Reglene foretrekker bevisst enklere modeller, også når de
+# ikke vinner alle folder. Bare én C1 ble testet; andre delkombinasjoner kan
+# være bedre uten å være undersøkt. Samme OOF-observasjoner ble brukt gjennom
+# hele seleksjonskjeden, så utviklingsgevinsten er seleksjonsoptimistisk og har
+# ingen samlet feilratekontroll. Tidskontrollen dekker bare 2022→2023. FU1 og
+# BR1 manglet den låste foldstøtten, og små merke-/residualsegmenter er for
+# svake for egne slutninger. Selv om alder og log-bilverdi hadde liten lineær
+# korrelasjon, kan andre blokker fortsatt dele forklaringskraft. Responsen er
+# registrert incurred, ikke ultimate kostnad. Bootstrapen bruker faste
+# OOF-prediksjoner og inkluderer verken parameter- eller seleksjonsusikkerhet.
 
 # %% [markdown]
 # ## 7. Beslutningsregister
@@ -1349,13 +1596,16 @@ display(final_coefficients.round(4))
 # | S-03 | Primærscore er pooled, skadeantallsvektet Gamma-deviance, beregnet med `sklearn.metrics.mean_tweedie_deviance(..., power=2)`. Foldscorene pooles med skadeantall, ikke snittes uvektet. | Etablert bibliotekfunksjon; ingen egen implementasjon å verifisere. Uvektet snitt ville gitt små folder for stor vekt. | Brukerbesluttet | 2.1 |
 # | S-04 | Usikkerhet måles som parvis cluster-robust SE på score**forskjeller**, gruppert på `insured_id`, med sentrerte clusterbidrag og endelig-antall-korreksjon (`src_severity/severity_scoring.py`). | Parvis sammenligning på de samme radene fjerner foldvariasjonen. Estimatoren er identisk med frekvensfasens Poisson-variant, verifisert numerisk. Den korrigerer ikke for seleksjonsoptimisme. | Brukerbesluttet | 2.2 |
 # | S-05 | `GroupKFold(n_splits=5, shuffle=True, random_state=100)` på hele modellpopulasjonens `insured_id` (B-06). Severity trenes på foldens positive skadeår. Ingen ny seed, ingen omfordeling, ingen gjentatt CV. | Samme folder som frekvens gjør fasene sammenlignbare og senere koblingsbare. Foldstørrelsene er kontrollert mot planens låste tall. | Brukerbesluttet | 2.3 |
-# | S-06 | Kandidatrommet er S0 pluss ni låste utfordrere. Ingen univariat screening, ingen interaksjoner, ingen generell baklengs seleksjon. Splines bruker `cr(..., df=k, constraints='center')` (B-10). | Et låst, lite kandidatrom er det som gjør en rapportert utviklingsscore ærlig. Baselinen er faglig og EDA-forankret, men ikke uavhengig av de samme utviklingsårene. | Brukerbesluttet | 2.4 |
+# | S-06 | Kandidatrommet er S0 pluss tretten låste utfordrere, inkludert FU1, BU1, PF1 og BR1 som separate blokker. Ingen univariat screening, interaksjoner eller generell baklengs seleksjon. Splines bruker `cr(..., df=k, constraints='center')` (B-10). | Et låst kandidatrom er det som gjør en rapportert utviklingsscore etterprøvbar. Baselinen er faglig og EDA-forankret, men ikke uavhengig av de samme utviklingsårene. | Brukerbesluttet | 2.4 |
 # | S-07 | Gyldighetskrav i alle fem folder: ≥ 50 unike `insured_id` per kategorinivå i severity-treningen, full rang, endelige parametere, positive endelige prediksjoner, ingen usette nivåer, og konvergens med `maxiter=200`, `tol=1e-8` likt for alle kandidater. | Like innstillinger gjør scoreforskjeller til modellforskjeller, ikke optimeringsforskjeller. Ingen redningsforsøk med ny pooling eller regularisering. | Brukerbesluttet | 2.5 |
 # | S-08 | Forbedring: $D_{\text{ref}} - D_{\text{kand}} > \max(\mathrm{SE}_{\text{par}}, 0{,}005\,D_{\text{ref}})$ og ≥ 4/5 folder. Forenkling: $D_{\text{kand}} - D_{\text{ref}} \le \min(\mathrm{SE}_{\text{par}}, 0{,}005\,D_{\text{ref}})$, uten foldkrav. Reglene er testet syntetisk i `src_severity/selection_tests.py`. | Asymmetrien uttrykker den avtalte preferansen for enkelhet. Grensene er konservative beslutningsheuristikker, ikke signifikanstester, og gir ingen kontrollert samlet feilrate. | Brukerbesluttet | 2.6 |
-# | S-09 | Algoritmen kjøres **én** gang i den låste rekkefølgen, med geografisærregelen for G2 og høyst én kombinert kandidat C1. Budsjett: ≤ 11 spesifikasjoner × 5 folder = ≤ 55 hovedtilpasninger. Diagnostiske refittinger føres separat og kan ikke bli kandidater. | Én gjennomkjøring uten omkamp er det som holder seleksjonsoptimismen på et nivå vi kan beskrive. Søket er avsluttet også når konklusjonen blir at S0 beholdes. | Brukerbesluttet | 2.7 |
+# | S-09 | Algoritmen kjøres **én** gang i den låste rekkefølgen, med geografisærregelen for G2 og høyst én kombinert kandidat C1. Protokollmaksimum: 14 faste spesifikasjoner × 5 folder = 70 hovedtilpasninger; 75 med C1. Før-fit-ugyldige kandidater fittes ikke. Diagnostiske refittinger føres separat og kan ikke bli kandidater. | Én gjennomkjøring uten omkamp er det som holder seleksjonsoptimismen på et nivå vi kan beskrive. Søket er avsluttet også når konklusjonen blir at S0 beholdes. | Brukerbesluttet | 2.7 |
 # | S-10 | Designmatrisene bygges og kontrolleres foldvis mot kandidatregisteret før første kandidatfit. Avvik håndteres etter S-07 — parametertall eller nivåer endres aldri stille for å få en kandidat til å passe. | Registerets nivåer, referanser og parametertall er kontrollert mot de faktiske foldvise designmatrisene før seleksjonen. | Implementert/verifisert | 3.5 |
 # | S-11 | OOF-prediksjoner lagres for **alle** poliseår i valideringsfolden, ikke bare de positive skadeårene, via et `fold_hook`. Severity-scoren beregnes fortsatt kun på det definerte positive utvalget. | Alle utviklingsrader fikk én OOF-prediksjon, slik at senere frekvens–severity-sammenkobling kan bruke komplette prediksjoner. | Implementert/verifisert | 2.3 |
-#
-# > **RESULTATPLASSHOLDER S-12+.** Resultatavhengige beslutninger om finalist,
-# > diagnostiske stopp, tidskontroll og sluttfit skal legges til her etter at det
-# > utvidede kandidatregisteret er implementert, låst og kjørt på nytt.
+# | S-12 | FU1 og BR1 forkastes før fit. BU1 og PF1 går videre til CV. | FU1s `MISSING`-nivå hadde 39–43 personer; BR1s `CHEVROLET`-nivå 42–50 og var under kravet i fire folder. Ingen redningspooling. | Resultat/verifisert | 3.4 |
+# | S-13 | A1, A2 og G1 kvalifiserer; blokkvalget endrer alder til A1 og geografi til G1. | Forenklings- og nesten-like-reglene ble anvendt én gang. BU1 og PF1 kvalifiserte ikke. | Resultat/verifisert | 4.2–4.4 |
+# | S-14 | C1 med lineær alder og kjøresone velges som finalist; 65 hovedfits ble brukt. | C1 hadde seks parametere, deviance 0,724835 og kvalifiserte mot S0, A1 og G1. C1 var alene nesten lik beste score. | Resultat/verifisert | 4.5–4.7 |
+# | S-15 | Kalibrerings-, bootstrap- og småbeløpskontrollene utløser ikke stopp. | Total C1 A/E 1,0003 (95 % intervall 0,9689–1,0326); gevinst mot S0 0,004170 (0,000126–0,008603); ≤1 EUR bidro med 0,28 % av deviancen. | Resultat/verifisert | 5.1–5.3 |
+# | S-16 | Topp-fem-personer-kontrollen utløser ikke innflytelsesstopp. | C1s forventede kostnad endret seg -1,58 % totalt og maksimalt -1,72 % per produkt. | Resultat/verifisert | 5.4 |
+# | S-17 | Tids- og segmentdriftstoppene utløses ikke. | C1 tapte 0,000645 mot S0 i 2023, mindre enn SE 0,003315 og 0,5 %-grensen 0,003544. Alle støttede Q-intervaller inkluderte 1. Dette er ingen dokumentasjon på generell tidsstabilitet. | Resultat/verifisert | 5.5 |
+# | S-18 | C1 refittes på alle 5 698 positive skadeår med cluster-robuste standardfeil; S0 beholdes som referanse. | Alle sluttfits konvergerte med låst preprocessing og Gamma/log-spesifikasjon. | Implementert/verifisert | 6 |
