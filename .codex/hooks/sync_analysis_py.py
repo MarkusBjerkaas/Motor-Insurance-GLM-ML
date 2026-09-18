@@ -67,6 +67,7 @@ def main() -> None:
     for notebook_name, source_name in (
         ("analysis.ipynb", "analysis.py"),
         ("tweedie.ipynb", "tweedie.py"),
+        ("ml_pricing.ipynb", "ml_pricing.py"),
     ):
         sync_pair(root, notebook_name, source_name)
 
