@@ -8,7 +8,7 @@
             "type": "command",
             "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/sync_analysis_py.py\"",
             "timeout": 30,
-            "statusMessage": "Synkroniserer analysis.py fra notebooken"
+            "statusMessage": "Synkroniserer Jupytext-kilder fra notebooker"
           }
         ]
       }
