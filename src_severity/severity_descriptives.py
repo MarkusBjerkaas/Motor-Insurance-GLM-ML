@@ -8,7 +8,7 @@ en ``matplotlib.figure.Figure``. Ingen funksjon her laster data, fitter noe,
 eller åpner nye kandidater/terskler i seleksjonen (se
 ``plans/Severity_plan.md``, "Før fitting: skadebeløp og støtte").
 
-Stil og fargepalett følger husstilen i ``src/own_damage_descriptives.py`` og
+Stil og fargepalett følger husstilen i ``src_descriptives/own_damage_descriptives.py`` og
 ``src/phase_2/frequency_plots.py``.
 """
 
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src.own_damage_descriptives import (
+from src_descriptives.own_damage_descriptives import (
     ACCENT,
     AXIS,
     CONTEXT,

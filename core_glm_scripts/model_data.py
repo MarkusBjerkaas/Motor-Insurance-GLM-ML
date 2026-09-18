@@ -42,7 +42,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.data_quality import build_variable_dictionary, clean_motor_data
+from src_descriptives.data_quality import build_variable_dictionary, clean_motor_data
 
 DATA_PATH = Path("data/Dataset of motor insurance portfolio.csv")
 TRAIN_YEARS = (2022, 2023)
