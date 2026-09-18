@@ -348,8 +348,8 @@ def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
         Hele train-poolen (2022–2023) spesifikasjonens datasett er hentet
         fra. Foldene indekserer inn i denne.
     folds : list of dict
-        Foldene fra ``build_model_frames``/tidsfolden, hver med ``fold``
-        (navn), ``train_index`` og ``val_index``.
+        Foldene fra notebooken, hver med ``fold`` (navn), ``train_index`` og
+        ``val_index``.
     fold_hook : callable or None, optional
         ``fold_hook(spec, fold_name, result, train_design, val_design,
         derived_state)``, kalt for hver gyldig fold. Kan returnere en dict

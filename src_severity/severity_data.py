@@ -6,7 +6,7 @@ som ``glm_pricing_models.py`` (frekvensfasen, seksjon 1.1, rundt linje
 er kopiert 1:1 derfra slik at severity bygger på nøyaktig samme datagrunnlag.
 
 ``build_severity_inputs`` tar imot utviklingsrammen fra
-``core_glm_scripts.model_data.build_development_frames()["development"]`` (kun 2022–2023,
+``src_core_glm.model_data.build_development_frames()["development"]`` (kun 2022–2023,
 2024 er aldri lest) og returnerer:
 
 - ``model_frame``: hele utviklingspopulasjonen, alle poliseår (også
@@ -23,7 +23,7 @@ er kopiert 1:1 derfra slik at severity bygger på nøyaktig samme datagrunnlag.
 
 import pandas as pd
 
-from core_glm_scripts.model_data import assert_development_years, to_model_frame
+from src_core_glm.model_data import assert_development_years, to_model_frame
 from src_descriptives.own_damage_descriptives import CURRENCY_ZERO_TOLERANCE
 
 # Identisk med glm_pricing_models.py (seksjon 1.1) — ingen nye kolonner.

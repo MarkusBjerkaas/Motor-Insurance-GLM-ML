@@ -4,67 +4,12 @@ Modellspesifikasjoner, CV-folder og CV-sløyfen ligger i notebooken. Her ligger
 bare funksjoner som beskriver data og folder og oppsummerer resultatene.
 """
 
-import re
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import poisson
 from sklearn.metrics import mean_tweedie_deviance
 from statsmodels.nonparametric.smoothers_lowess import lowess
-
-
-def build_data_overview(model_frame, severity_frame):
-    """Nøkkeltall for modellrammen og severity-delmengden (seksjon 1.1)."""
-    exposure = model_frame["total_exposure"].sum()
-    claim_years = int(model_frame["property_claims"].gt(0).sum())
-    return pd.Series(
-        {
-            "Poliseår": len(model_frame),
-            "Eksponering": exposure,
-            "Skadeantall": model_frame["property_claims"].sum(),
-            "Porteføljefrekvens": model_frame["property_claims"].sum() / exposure,
-            "Ren premie per eksponeringsår (EUR)": model_frame[
-                "property_incurred"
-            ].sum()
-            / exposure,
-            "Skadeår i severity": len(severity_frame),
-            "Skadeår utelatt fra severity (incurred ≤ 0,01)": claim_years
-            - len(severity_frame),
-            "Snittskade, vektet med antall (EUR)": severity_frame[
-                "property_incurred"
-            ].sum()
-            / severity_frame["property_claims"].sum(),
-        },
-        name="Verdi",
-    )
-
-
-def build_fold_summary(frame, folds):
-    """Beskriv valideringsdelen i hver fold: volum, nivå og sammensetning.
-
-    Brukes til å sjekke at foldene er sammenlignbare, særlig andelen
-    kansellerte poliser og andelen 2023-rader, som begge flytter frekvensnivået.
-    """
-    rows = []
-    for fold in folds:
-        part = frame.loc[fold["val_index"]]
-        rows.append(
-            {
-                "fold": fold["fold"],
-                "poliseår": len(part),
-                "unike_poliser": part["insured_id"].nunique(),
-                "eksponering": part["total_exposure"].sum(),
-                "skadeantall": part["property_claims"].sum(),
-                "frekvens": part["property_claims"].sum()
-                / part["total_exposure"].sum(),
-                "ren_premie": part["property_incurred"].sum()
-                / part["total_exposure"].sum(),
-                "andel_kansellert_prosent": part["policy_status"].eq("C").mean() * 100,
-                "andel_2023_prosent": part["year"].eq(2023).mean() * 100,
-            }
-        )
-    return pd.DataFrame(rows).set_index("fold").round(3)
 
 
 def build_glm_summary(spec, result, data):
@@ -93,46 +38,6 @@ def build_glm_summary(spec, result, data):
             "balanse": (prediction * weight).sum() / (response * weight).sum(),
         },
         name=spec["name"],
-    )
-
-
-def build_relativity_table(spec, result):
-    """Relativitetstabell i tariffstil: exp(β) med 95 %-KI per variabel og nivå.
-
-    Patsy-navn som ``C(policy_type, Treatment('COMP_E'))[T.COMP_N]`` deles opp i
-    variabel og nivå. Basisnivåene legges til med relativitet 1, slik at hver
-    variabel vises komplett. KI-ene bruker kovariansen modellen ble estimert med
-    (cluster-robust når ``fit_glm`` fikk ``cluster_groups``).
-    """
-    confidence = np.exp(result.conf_int())
-    rows = []
-    for term, coefficient in result.params.items():
-        match = re.fullmatch(r"C\((\w+).*\)\[T\.(.+)\]", term)
-        variable, level = match.groups() if match else (term, "")
-        rows.append(
-            {
-                "variabel": variable,
-                "nivå": level,
-                "koeffisient": coefficient,
-                "standardfeil": result.bse[term],
-                "relativitet": np.exp(coefficient),
-                "ki_lav": confidence.loc[term, 0],
-                "ki_høy": confidence.loc[term, 1],
-            }
-        )
-    for variable, base in spec["base_levels"].items():
-        rows.append(
-            {"variabel": variable, "nivå": f"{base} (basis)", "relativitet": 1.0}
-        )
-
-    variable_order = {name: i for i, name in enumerate(["Intercept", *spec["x"]])}
-    table = pd.DataFrame(rows)
-    table["_order"] = table["variabel"].map(variable_order)
-    table["_base_last"] = ~table["nivå"].str.endswith("(basis)")
-    return (
-        table.sort_values(["_order", "_base_last", "nivå"], kind="stable")
-        .drop(columns=["_order", "_base_last"])
-        .set_index(["variabel", "nivå"])
     )
 
 
@@ -302,36 +207,3 @@ def _predictor_label(predictor):
         "performance_hp_per_tonne": "Ytelse (hk per tonn)",
     }
     return labels.get(predictor, predictor.replace("_", " ").capitalize())
-
-
-def summarize_cv_scores(fold_scores):
-    """Oppsummer fold-scorene per modell.
-
-    ``fold_scores`` har én rad per (modell, fold), som returnert av
-    ``cross_validate_glm``. OOF-målene pooles med målvariabelens vekter;
-    standardfeilen er fold-standardavviket delt på roten av antall folder.
-    Med fem folder er den et grovt mål.
-    """
-    rows = []
-    for model, scores in fold_scores.groupby("model", sort=False):
-        oof_deviance = np.average(scores["val_deviance"], weights=scores["val_weight"])
-        oof_null_deviance = np.average(
-            scores["val_null_deviance"], weights=scores["val_weight"]
-        )
-        rows.append(
-            {
-                "model": model,
-                "folder": len(scores),
-                "train_deviance": np.average(
-                    scores["train_deviance"], weights=scores["train_weight"]
-                ),
-                "oof_null_deviance": oof_null_deviance,
-                "oof_deviance": oof_deviance,
-                "oof_deviance_se": scores["val_deviance"].std(ddof=1)
-                / np.sqrt(len(scores)),
-                "oof_d2": 1 - oof_deviance / oof_null_deviance,
-                "oof_balanse": scores["val_predicted"].sum()
-                / scores["val_actual"].sum(),
-            }
-        )
-    return pd.DataFrame(rows).set_index("model")

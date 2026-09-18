@@ -18,9 +18,9 @@ ALDRI! Inspisere, lese, loade, trene på, eller bruke test settet fra 2024 på n
 - `analysis.ipynb` — hoveddokumentet. Alt av modellspesifikasjon, loss-funksjoner og kritisk feature engineering skal ligge her (eller importeres og kjøres her). Dette er det som skal vise hva jeg kan, så det kritiske hører hjemme her, ikke gjemt i en script-fil.
 - `glm_pricing_models.ipynb` — modelleringsnotebook for GLM-benchmarken på egen skade (fase 1–4: frekvens, severity/storskader, todelt modell mot Tweedie, konsolidert benchmark). All kode for modellspesifikasjoner og CV-definisjon skrives her; diagnostikk, tabeller og plott kan ligge i `src/` og importeres. Inneholder et beslutningsregister (B-xx) som skal holdes oppdatert.
 - `bonus_score_analysis.ipynb` — separat diagnostikk av tidsplasseringen til `bonus_score`.
-- `core_glm_scripts/model_data.py` — felles datagrunnlag (avgrensning, tidssplitt, merke-pooling, transparente prediktorer) brukt av både `analysis` og `glm_pricing_models`. Endringer her må verifiseres ved å kjøre begge notebooks.
+- `src_core_glm/model_data.py` — felles datagrunnlag (avgrensning, tidssplitt, merke-pooling, transparente prediktorer) brukt av både `analysis` og `glm_pricing_models`. Endringer her må verifiseres ved å kjøre begge notebooks.
 - `plans/` — styringsdokumenter for modelleringsløpet, f.eks. `plans/glm_pricing_models_plan.md`. **Planen er levende: ved starten av hver ny fase skal den leses, revurderes mot resultatene fra forrige fase og skrives om ved behov.** Hver revurdering logges i planens endringslogg (også når ingenting endres), og vesentlige endringer legges frem for meg før implementeringen starter.
-- `core_glm_scripts/`, `src_descriptives/`, `src_frequency/` og `src_severity/` — aktive støttefunksjoner, organisert etter ansvar. `src_archive/` er en lokal, ignorert mappe for ubrukte scripts og skal aldri importeres av en notebook.
+- `src_core_glm/`, `src_descriptives/`, `src_frequency/` og `src_severity/` — aktive støttefunksjoner, organisert etter ansvar. `src_archive/` er en lokal, ignorert mappe for ubrukte scripts og skal aldri importeres av en notebook.
 - `src_temp/` — engangs-testscripts som ikke trenger å dokumenteres eller has med i git-historikken.
 
 ## Notebook-workflow — viktig

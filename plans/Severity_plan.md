@@ -340,7 +340,7 @@ Agentene får konkrete filområder. Bare én agent redigerer modellnotebooken om
 
 - Modellspesifikasjoner, kandidatregister, preprocessingregler, CV-definisjon og seleksjonsalgoritme ligger i `glm_pricing_models.py`.
 - Diagnostikk og presentasjon kan legges i beskrivende moduler under `src/`.
-- Felles utviklingsinnlesing legges i `core_glm_scripts/model_data.py`, med en egen utviklingsfunksjon som ikke returnerer eller transformerer en testramme.
+- Felles utviklingsinnlesing legges i `src_core_glm/model_data.py`, med en egen utviklingsfunksjon som ikke returnerer eller transformerer en testramme.
 - Begge hovednotebookene bruker den sikre utviklingsflyten. Eksisterende celler som inspiserer teståret må ikke kjøres.
 
 CV-resultatet skal minst inneholde:
