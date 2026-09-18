@@ -3638,9 +3638,6 @@ display(
 abess_best_combination = abess_top_combinations.iloc[0]
 display(abess_best_combination["koeffisienter"].round(4).to_frame())
 
-# %%
-abess
-
 # %% [markdown]
 # ### 3.12 Oppsummering fase 1
 #
@@ -3748,6 +3745,9 @@ abess
 
 # %%
 print(final_fit.summary())
+
+# %%
+final_fit.params
 
 # %% [markdown]
 # ## 7. Beslutningsregister
