@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
 #   kernelspec:
-#     display_name: 'defaultInterpreterPath: 3.12.14.final.0'
+#     display_name: MotorForsikring (3.12.x)
 #     language: python
 #     name: python3
 # ---
@@ -3634,6 +3634,9 @@ display(
 # %%
 abess_best_combination = abess_top_combinations.iloc[0]
 display(abess_best_combination["koeffisienter"].round(4).to_frame())
+
+# %%
+abess
 
 # %% [markdown]
 # ### 3.12 Oppsummering fase 1

@@ -1,0 +1,376 @@
+# Severity-modellering: låst kandidatsøk og tydelige stoppkriterier
+
+## 1. Formål, beslutninger og faktagrunnlag
+
+Denne planen vedlikeholdes i `plans/Severity_plan.md`. Den eksisterende hovedplanen beholdes som historikk.
+
+Målet er å utvikle en transparent Gamma-benchmark for registrert skadekostnad per registrert skade, og undersøke om avgrensede endringer forbedrer en faglig og EDA-forankret baseline.
+
+**Brukerbeslutninger som ligger fast:**
+
+- Vanlig femfolds gruppe-CV på `insured_id`. Ingen indre CV eller ekstra holdout.
+- Baseline og kandidatrommet nedenfor er låst.
+- Bare seteinndelingen `<5`, `=5`, `>5` inngår.
+- Enklere modeller foretrekkes ved tilnærmet like resultater.
+- Storskader undersøkes diagnostisk. Ingen kapping eller halemodell i dette løpet.
+- Inverse Gaussian er eneste mulige fordelingsutfordrer, helt til slutt. **Den skal verken implementeres eller fittes uten en separat, uttrykkelig godkjenning.**
+- Frekvensmodellen F5 forblir låst.
+- Teknisk årssplitt av kildefilen er tillatt. Videre behandling av 2024 er ikke tillatt.
+
+De tallfestede seleksjons- og stoppgrensene i denne planen er faglige styringsforslag som låses med planen. De er ikke litteraturbestemte sannheter eller tidligere godkjente tallgrenser.
+
+**Planen er levende, men seleksjonsreglene er bindende.** Nye funn kan avdekke at datagrunnlaget eller modelloppgaven må revurderes. De gir ikke adgang til å endre features, kategorigrenser, splinegrader, CV-seed, score eller akseptgrenser for å forbedre et sett resultater som allerede er sett.
+
+### Kontrollert nåsituasjon
+
+Følgende er reprodusert på utviklingsårene, uten modellfitting:
+
+| Kontrollpunkt | Resultat |
+|---|---:|
+| Poliseår i modellpopulasjonen | 55 246 |
+| Eksponeringsår | 37 126,014 |
+| Registrerte skader | 9 989 |
+| Poliseår med registrert skade | 5 707 |
+| Positive skadeår til severity | 5 698 |
+| Unike `insured_id` i severity-utvalget | 5 323 |
+| Registrerte skader i positivt utvalg | 9 979 |
+| Utelatte null-/nærnullkostnadsår | 9 år med 10 registrerte skader |
+| Skadevektet severity, alle registrerte skader | 871,771 EUR |
+| Skadevektet severity, positivt utvalg | 872,645 EUR |
+
+De utelatte årenes samlede kostnad er numerisk tilnærmet null. De skal fortsatt inngå i frekvens og senere ren-premie-evaluering.
+
+Frekvensmodellen er `F5_minus-municipality-performance`: Den beholdt kjøresone og fjernet kommunetype. Dette begrenser ikke det avtalte severity-kandidatrommet.
+
+Lagrede frekvensresultater viser F5-deviance 1,121675 og ABESS-deviance 1,121144. ABESS har altså **0,000531 lavere/betre** utviklingsscore, omtrent 0,63 cluster-SE. Notebookens gjenværende tekst om at ABESS «taper», skal korrigeres uten endring av frekvensmodellen.
+
+Tall fra lagret modelloutput skal merkes som dette inntil reproduksjon er bekreftet. Samsvar mellom notebookens kilde og `.py` beviser ikke at lagret output er produsert av dagens kode og støttefunksjoner.
+
+### Korrigert litteraturgrunnlag
+
+Baselinen skal omtales som **faglig og EDA-forankret, med begrenset direkte kaskolitteratur**. Den er ikke uavhengig av tidligere innsikt fra 2022–2023.
+
+Reiff-studien bruker justert lineær regresjon på log-severity for slovakisk motoransvar. Det er ikke en Gamma-regresjon for kasko. [Reiff mfl., fulltekst](https://economic-policy.pl/index.php/eq/article/download/2058/1960).
+
+| Variabel | Dokumentasjon og justering | Overførbarhet | Form i vårt løp og evidensstatus |
+|---|---|---|---|
+| Produkt | Deknings-/egenandelsmekanikk og egen EDA; ingen direkte justert studie verifisert i gjennomgangen | Relevant, men rapportering og seleksjon gjør retningen usikker | Kategorisk; arbeidsantakelse |
+| År | Egen portefølje og behov for årskontroll | Kontrollerer registrerte årsforskjeller, ikke identifisert inflasjon | Kategorisk; metodisk valg |
+| Bilverdi | Reparasjons-/erstatningsverdi og egen EDA; ingen direkte justert kilde verifisert | Faglig plausibel kaskodriver | Log-verdi lineært eller spline df3; begge er arbeidsantakelser |
+| Føreralder | Reiff finner justerte forskjeller etter **forsikringstakers alder**, med merkeinteraksjon; ingen generell U-form dokumentert | Indirekte: annet aldersbegrep og annen dekning | Lineær/df2/df3/df4; funksjonsformene er våre valg |
+| Kommunetype og kjøresone | Egen EDA; Reiffs distriktseffekt dokumenterer ikke våre geografikategorier eller deres retning | Begrenset litteraturstøtte for de konkrete feltene | Kategoriske alternativer; empirisk spørsmål |
+| Ytelse | Reiff finner positiv motoreffekt og negativ vekteffekt, justert og modellert separat | Indirekte støtte; dokumenterer ikke vårt forholdstall | Lineær eller spline df3; egen transformasjon og form |
+| Seter | Egen EDA; ingen verifisert kostnadsseverity-kilde | Usikker prediktiv verdi utover bilverdi og ytelse | `<5`, `=5`, `>5`; forhåndsvalgt arbeidsantakelse |
+
+Gamma/log-link har etablert metodisk støtte for severity. Det begrunner en startmodell, ikke at fordelingen nødvendigvis beskriver våre data korrekt. [CAS Monograph 5, andre utgave](https://www.casact.org/sites/default/files/database/monographs_papers_05-goldburd-khare-tevet.pdf).
+
+Oyugi-kilden skal ikke brukes som argument for lognormalfordeling av opprinnelige beløp: Fullteksten beskriver fordelingsfitting på trippel-log-transformerte beløp. Påstanden om K–S/Anderson–Darling som grunnlag for den rapporterte sammenligningen er heller ikke verifisert. [Oyugi, side 13–15](https://actuaries.org/app/uploads/2025/07/ICA2010_ASTIN_22_final_-paper_Oyugi.pdf).
+
+Personskadestudiene dokumenterer en annen respons enn kostnadsseverity og skal ikke brukes til å fastsette retninger her. Manglende litteraturstøtte betyr ikke dokumentert manglende prediktiv verdi.
+
+## 2. Datagrunnlag, modeller og bindende seleksjonsalgoritme
+
+### Sikker utviklingsdataflyt
+
+Dagens innleser behandler 2024 før testrammen fjernes. Denne flyten må erstattes før notebookene kjøres.
+
+- Les kildefilen i biter og behold bare 2022–2023 umiddelbart.
+- Forkast øvrige rader før rensing, kvalitetsoppsummeringer, transformasjoner eller modellering. Ikke rapporter testårets antall eller innhold.
+- Rens hele utviklingspopulasjonen før produktavgrensning; eksisterende rensekode forventer en bestemt korreksjonsrad fra 2022.
+- Behold eksisterende avgrensning: `COMP_E`/`COMP_N`, positiv egen-skadepremie og positiv eksponering. Kansellerte poliser beholdes.
+- Bevar radidentitet og rekkefølge slik at frekvens- og severity-foldene kan kobles entydig.
+- Kontroller tillatte år ved inngangen til hver analyse- og modelleringsfunksjon.
+
+### Respons og arbeidsmodell
+
+Bruk:
+
+- `average_severity = property_incurred / property_claims`.
+- Utvalg: `property_claims > 0` og **samlet** `property_incurred > 0.01`.
+- Gamma med log-link og `var_weights=property_claims`.
+- Ingen eksponeringsvekt eller eksponeringsoffset i severity-modellen.
+- Ingen kapping, winsorisering eller automatisk rekalibrering.
+
+EDA har tidligere anvendt nullgrensen på gjennomsnittsskaden. Definisjonene gir samme utvalg i dagens data, men modellen skal bruke definisjonen over konsekvent.
+
+Skadeantallsvekten retter modellen mot kostnad per registrert skade i aggregatet. Observasjonene er fortsatt poliseår, ikke rekonstruerte enkeltskader. Arbeidsantakelsen om varians proporsjonal med `mu²/N` kan svikte ved avhengige skader og uavklart skadetelling.
+
+### Kandidatregister
+
+Alle kandidater sammenlignes først mot samme faste baseline. Ingen univariat screening, interaksjoner eller generell baklengs variabelseleksjon.
+
+| ID | Spesifikasjon | Regresjonsparametere inkludert intercept |
+|---|---|---:|
+| S0 | Produkt + år + kommunetype + aldersspline df3 + lineær log-bilverdi | 9 |
+| A1 | S0 med lineær alder | 7 |
+| A2 | S0 med aldersspline df2 | 8 |
+| A4 | S0 med aldersspline df4 | 10 |
+| V3 | S0 med spline df3 for log-bilverdi | 11 |
+| G1 | S0 med kjøresone **i stedet for** kommunetype | 8 |
+| G2 | S0 med både kommunetype og kjøresone | 10 |
+| P1 | S0 + lineær ytelse | 10 |
+| P3 | S0 + ytelsesspline df3 | 12 |
+| T1 | S0 + seter kategorisk: `<5`, `=5`, `>5` | 11 |
+
+Parametertallene forutsetter de dokumenterte kategorinivåene og full rang. Før første kandidatfit skal implementeringen bygge designmatrisene foldvis og kontrollere kategorinivåer, referansenivåer, kolonneantall og rang mot registeret. Avvik håndteres etter gyldighetsreglene nedenfor; implementeringen skal ikke stille endre parametertall eller utelate nivåer for å få kandidaten til å passe.
+
+Splines bruker `cr(..., df=k, constraints='center')`. Knuter og sentrering læres på treningsfolden og gjenbrukes ved prediksjon. Numerisk imputasjon bruker treningsmedian. Ingen automatisk sletting av rader.
+
+Referansenivåer: produkt `COMP_E`, år 2022, kommune `I`, kjøresone `U`, seter `=5`.
+
+Drivstoff, merke, bilalder, betalingsfrekvens og `business_type` inngår ikke i dette kandidatrommet. Erfaring inngår heller ikke i seleksjonen; eventuell senere sensitivitet krever eget avgrenset opplegg. Tidligere lekkasjeeksklusjoner videreføres.
+
+### Fem faste gruppefolder
+
+Bruk eksisterende `GroupKFold(n_splits=5, shuffle=True, random_state=100)` på hele modellpopulasjonens `insured_id`. Severity trenes på foldens positive skadeår.
+
+| Fold | Positive skadeår i trening | Positive skadeår i validering |
+|---|---:|---:|
+| 1 | 4 563 | 1 135 |
+| 2 | 4 527 | 1 171 |
+| 3 | 4 593 | 1 105 |
+| 4 | 4 535 | 1 163 |
+| 5 | 4 574 | 1 124 |
+
+Ingen ny seed, omfordeling etter skadekostnad eller gjentatt CV for å lete etter gunstigere resultater.
+
+Modellen skal også predikere **alle poliseår i valideringsfolden**, slik at senere frekvens–severity-sammenkobling får komplette OOF-prediksjoner. Severity-scoren beregnes bare på det definerte positive utvalget.
+
+### Gyldighet før seleksjon
+
+En kandidat må bestå i alle fem folder:
+
+- Minst 50 unike `insured_id` i hvert kategorinivå i severity-treningen.
+- Full rang, ingen uventet radbortfall, endelige parametere og positive, endelige prediksjoner.
+- Konvergens med samme innstillinger for alle kandidater: maksimalt 200 iterasjoner og toleranse `1e-8`.
+- Ingen usette kategorinivåer ved prediksjon og ingen manglende verdier etter preprocessing.
+
+En valgfri kandidat som ikke består, markeres ugyldig. Ingen ny pooling, kategorisering eller regularisering legges til som redningsforsøk. Svikt i S0 utløser stopp for hele seleksjonsløpet.
+
+50-personerskravet gjelder **treningsstøtte**, ikke størrelsen på hvert valideringssegment. Det innføres ingen minstegrense per valideringskategori som kan fjerne observasjoner fra pooled score eller gjøre en ellers gyldig kandidat ugyldig. Rapportér antall skadeår og unike personer per segment, både foldvis og samlet OOF. Små valideringssegmenter merkes som svakt støttet og skal ikke alene begrunne segmentkonklusjoner. De særskilte 100-personerskravene i stoppregisteret gjelder den populasjonen den aktuelle diagnostikken beregnes på: samlet OOF for produkt/desil og hvert enkelt år for segmentdrift.
+
+### Primærscore og usikkerhet
+
+Primærscore er pooled, skadeantallsvektet Gamma-deviance:
+
+`D = sum(N × d(y, mu)) / sum(N)`
+
+med `d(y, mu) = 2 × (y/mu − 1 − log(y/mu))`.
+
+Foldscorene skal ikke gjennomsnittsberegnes uvektet.
+
+Definer positiv gevinst som `D_reference − D_candidate`. Parvis SE beregnes fra de vektede scoreforskjellene, gruppert på `insured_id`, med sentrerte clusterbidrag og endelig-antall-korreksjon. Den eksisterende Poisson-spesifikke hjelpefunksjonen skal ikke brukes uendret.
+
+Cluster-SE beskriver usikkerhet i de observerte scoreforskjellene. Den korrigerer ikke seleksjonsoptimisme eller hele variasjonen fra modelltrening.
+
+### Entydige utvalgsregler
+
+**Forbedringsregel:** En kandidat med like mange eller flere parametere kvalifiserer bare hvis:
+
+- Gevinsten er større enn både én parvis cluster-SE og **0,5 % av referansens deviance**.
+- Kandidaten forbedrer scoren i minst fire av fem folder.
+
+**Forenklingsregel:** En kandidat med færre parametere kvalifiserer dersom:
+
+`D_candidate − D_reference ≤ min(SE_pair, 0.005 × D_reference)`.
+
+En forenkling kan dermed aksepteres med en liten forverring, men bare innen begge grensene.
+
+Asymmetrien er tilsiktet: Forbedringsregelen krever gevinst i minst fire av fem folder, mens forenklingsregelen ikke krever et bestemt antall forbedrede folder. Dette uttrykker den avtalte preferansen for enkelhet, ikke en påstand om at forenklingen er bedre i hver fold. Foldvise scoreforskjeller skal fortsatt vises, også når pooled score kvalifiserer en forenkling som taper i flere folder. Ingen ny foldterskel legges til etter at resultatene er sett.
+
+**Regel for nesten like resultater:** Finn laveste score blant kvalifiserte kandidater. Ta med alternativer som ligger innen både én parvis SE og 0,5 % av denne beste scoren. Velg færrest parametere; deretter lavest score; deretter alfabetisk kandidat-ID.
+
+Utfør følgende én gang:
+
+1. Kvalifiser alle ni enkeltutfordrere mot S0.
+2. G2 må bestå forbedringsregelen mot **både S0 og G1**, på de samme fem foldene. G1 må være gyldig etter støtte- og gyldighetskontrollene, men trenger ikke selv å kvalifisere mot S0 for å være sammenligningsgrunnlag. Hvis G1 er ugyldig, kan tilleggsverdien ikke dokumenteres, og G2 kvalifiserer ikke. En gevinst mot G1 kan aldri kompensere for at G2 ikke består kravet mot S0. Begge geografivariabler må dermed begrunne merverdien utover **hver** enkeltvariabel.
+3. Velg ett alternativ i hver blokk: alder, verdi, geografi, ytelse og seter. S0 representerer uendret blokk. Bruk regelen for nesten like resultater.
+4. Dersom minst to blokker endres, bygg **én** samlet kandidat C1. Ingen andre kombinasjoner tillates.
+5. C1 må bestå den relevante forbedrings-/forenklingsregelen mot S0 og mot hver valgt enkeltutfordrer. Reglene anvendes ut fra parametertallet i hvert sammenligningspar.
+6. Velg finalist blant S0, kvalifiserte enkeltutfordrere og eventuell kvalifisert C1 med den samme regelen for nesten like resultater.
+7. Dersom C1 forkastes, brukes de allerede kvalifiserte enkeltmodellene som fallback. Ingen oppdeling av C1 og ny kombinasjonsrunde.
+
+Maksimalt **ti faste spesifikasjoner og én kombinert kandidat**, tilsvarende høyst 55 hovedtilpasninger over fem folder. Diagnostiske refittinger nedenfor føres separat i kjøreloggen og kan ikke bli nye kandidater.
+
+0,5 %-grensen og 1-SE-regelen er konservative beslutningsheuristikker, ikke signifikanstester. De gjenbrukes ved enkeltkvalifisering, geografisammenligning, blokkvalg, kombinasjonskontroll og finalistvalg på de samme valideringsobservasjonene. Beslutningene er avhengige; tersklene gir ingen kontrollert samlet feilrate og fjerner ikke seleksjonsoptimismen gjennom hele prosedyren. En eventuell gevinst for vinneren kan derfor overvurdere forbedringen på nye data. Det låste kandidatbudsjettet begrenser søket, men opphever ikke denne begrensningen. Søket er avsluttet også når konklusjonen blir at S0 beholdes.
+
+## 3. Diagnostikk, stoppkriterier og revisjon
+
+### Før fitting: skadebeløp og støtte
+
+Lag korte tabeller og plott for:
+
+- Kostnadskonsentrasjon og de største bidragene per poliseår og person.
+- Overskridelser ved 5 000, 7 500 og 10 000 EUR, separat for samlet årskostnad og gjennomsnittsskade.
+- Antall overskridende skadeår, unike personer, kostnadsandel og **overskytende** kostnadsandel. Disse størrelsene må ikke blandes.
+- Null-/nærnullkostnader, beløp under 1 og 10 EUR, og tydelige beløpsklumper.
+- Støtte per produkt, år, geografi, setekategori og skadeantallsgruppe.
+
+Kontrollen har funnet 136, 68 og 37 positive skadeår med gjennomsnittsskade over de tre tersklene. Dette er ikke antall individuelle storskader. Ved flere registrerte skader kan én stor skade skjules i gjennomsnittet.
+
+Ingen av disse diagnostikkene åpner for nye features eller nye terskler i kandidatsøket.
+
+### Etter seleksjon: EUR-kalibrering og stabilitet
+
+Undersøk både S0 og den valgte finalisten:
+
+- A/E = faktisk kostnad delt på `sum(N × predikert severity)`.
+- Totalt, per produkt, år, geografivariabel, setekategori og `N=1`, `N=2–3`, `N≥4`.
+- Prediksjonsdesiler definert fra S0s OOF-prediksjoner, med skadeantallsvektede grenser. Bruk samme grupper for begge modeller.
+- Foldvise effekter og splinekurver, med synlig observasjonsstøtte.
+- Bidrag til deviance og EUR-feil fra små beløp og store kostnader.
+
+**Kollinearitet og fortolkning:** Etter finalistvalget undersøkes sammenhengen mellom log-bilverdi og ytelse dersom begge inngår. Rapportér korrelasjonen mellom de numeriske inputvariablene i severity-treningen og vurder foldstabiliteten til hele effektkurvene/blokkene på et felles, støttet kovariatområde. Skill mellom stabile samlede prediksjoner og usikker fordeling av effekten mellom variablene. VIF for enkelte splinekolonner skal ikke brukes som automatisk grense: Høy VIF kan skyldes basisrepresentasjonen. Diagnostikken er en vurdering av fortolkningsbegrensninger, ikke en ny seleksjons- eller stoppregel; ingen variabel fjernes eller kandidat prøves på nytt på dette grunnlaget. Full rang og øvrige eksisterende gyldighetskrav gjelder fortsatt.
+
+Bruk 2 000 cluster-bootstrap-trekk på `insured_id`, seed 410, med faste OOF-prediksjoner og samme trekk for modellene. Rapportér percentile-intervaller på 95 %. Ikke kopier Poisson-baserte usikkerhetsgrenser fra frekvens.
+
+Bootstrapen refitter ikke modeller og gjentar ikke seleksjonen. Intervallene er derfor betinget på de tilgjengelige OOF-prediksjonene, og gir ingen garanti for haler som ikke er representert.
+
+For innflytelse gjennomføres én fast sensitivitet: I hver treningsfold fjernes de fem personene med høyest samlet registrert kostnad. S0 og finalisten refittes med uendret spesifikasjon og predikerer den opprinnelige valideringsfolden. Dette er maksimalt ti diagnostiske refittinger; ingen av dem kan erstatte hovedmodellen.
+
+`N=1` vurderes mot hovedmodellens kovariatjusterte OOF-forventning. Det er et selektert utvalg og ikke nødvendigvis én fysisk hendelse. Ingen forklaring med flåtestørrelse brukes uten dokumentasjon.
+
+### Avgrenset tidskontroll og modenhet
+
+Etter CV-valget låses finalistens formel. Fit S0 og finalisten på 2022 og evaluer på 2023, uten årsledd og med preprocessing lært bare fra 2022. Ingen kandidatseleksjon gjentas på tidsresultatet.
+
+Rapportér:
+
+- Globalt nivåskift.
+- A/E per produkt og skadeantallsgruppe.
+- Årsvise null-/nærnullkostnader og kostnadsnivåer.
+- Segmentenes A/E relativt til årets totale A/E, slik at global drift skilles fra endrede relativiteter.
+
+For miksstandardisering fit begge spesifikasjoner separat per år uten årsledd. Predikér begge årstilpasningene på samme samlede positive utviklingspopulasjon med samme skadevekter. Vis også hvor mye av referansepopulasjonen som ligger utenfor det enkelte årets observerte kovariatområde. Disse tilpasningene er forklarende diagnostikk, ikke valideringsresultater.
+
+Tidskontrollen tillater samme person i begge år: Den undersøker en annen generaliseringssituasjon enn gruppe-CV.
+
+Det finnes bare **én kalenderovergang**, 2022→2023. Vi kan ha informasjon nok til å oppdage en scoreforskjell innen 2023, men kan ikke vurdere hvordan forskjellen varierer mellom flere fremtidige år. Usikkerhetsintervallene innen denne tidsdelingen dekker ikke variasjonen mellom kalenderoverganger. At tidsstoppkriteriet ikke utløses, skal rapporteres som «ingen forverring påvist i denne tidsdelingen», ikke som dokumentert tidsstabilitet. Dette forbeholdet skal også fremgå av sluttrapporten.
+
+Bruk betegnelsen **årskontroll**, ikke estimert skadeinflasjon. Dataene mangler grunnlag for å skille kalenderutvikling fra reserve-/oppgjørsutvikling. Modellen gjelder registrert incurred, ikke dokumentert ultimate kostnad.
+
+### Stoppregister
+
+Tallgrensene under låses før kandidatfitting. Kalibrerings- og innflytelsesgrenser er praktiske revisjonssignaler, ikke formelle tester med kontrollert samlet feilrate.
+
+| Situasjon | Konkret utløser | Pålagt handling |
+|---|---|---|
+| Datagrense eller lekkasje | Andre år enn 2022–2023 når analysefunksjoner; overlappende CV-personer; transformasjoner lærer fra valideringen | **Stopp kjøringen.** Rett datatilgangen eller implementeringsfeilen før modeller kjøres |
+| Avvik i datagrunnlaget | Kontrolltall, radnøkler eller responsdefinisjon avviker uten forklart årsak; negativ materiell incurred; positiv kostnad uten registrert skade | **Stopp før seleksjon.** Avklar datafeil eller semantikk |
+| Numerisk/støttemessig svikt | S0 bryter en gyldighetsregel; eller finalisten ikke kan refittes med den låste spesifikasjonen | **Stopp.** Ikke løs problemet ved å endre modellinnhold automatisk |
+| Valgfri kandidat svikter | Kandidaten bryter støtte-/gyldighetskrav eller består ikke seleksjonsregelen | **Forkast kandidaten og fortsett etter algoritmen.** Dette utløser ikke ny modelljakt |
+| Materiell EUR-feil | Totalt A/E utenfor 0,90–1,10 og bootstrapintervallet utelukker 1; eller produkt-/prediksjonsdesil-A/E utenfor 0,80–1,20 med minst 100 personer og intervallet utelukker 1 | **Stopp sluttgodkjenningen.** Undersøk feilen; ikke velg neste kandidat til en passer |
+| Sterk innflytelse | Den faste topp-fem-personer-sensitiviteten endrer pooled forventet kostnad mer enn 5 %, eller mer enn 10 % i et produkt | **Stopp sluttgodkjenningen.** Vurder om forventningsestimatet har tilstrekkelig støtte |
+| Små beløp styrer scoren | Skadeår med gjennomsnittsskade ≤1 EUR står for over 10 % av Gamma-deviancen, men under 0,1 % av kostnaden | **Faglig stopp.** Kontroller beløpsbetydning og målkonflikt; ikke flytt nullgrensen etter score |
+| Tidsmessig forverring | Finalisten taper mot S0 i tidsfolden med mer enn både én cluster-SE og 0,5 % deviance | **Stopp finalistens sluttgodkjenning.** Ikke start ny tuning på 2023 |
+| Segmentdrift over tid | For et produkt eller en skadeantallsgruppe med minst 100 personer i hvert år endres normalisert A/E med over 20 %, og bootstrapintervallet for forholdet utelukker 1 | **Faglig stopp.** Avklar om stabilitetsforutsetningen holder |
+| Nye dokumenterte fakta | Ny kildeinformasjon endrer betydningen av skadeantall, incurred, dekning eller tidspunktet for prediktorene | **Stopp berørte konklusjoner.** Revider problemdefinisjonen før videre arbeid |
+
+Et svakt eller motsatt forventet fortegn er ikke alene et stoppkriterium. Et lite, usikkert segment markeres som svakt støttet; det blir ikke automatisk en ny feature eller interaksjon.
+
+Et globalt tidsnivåskift er heller ikke alene bevis for at segmentrelativitetene er feil. Det skal rapporteres og vurderes før senere prising.
+
+### Hva en faglig stopp innebærer
+
+Agenten leverer et kort stoppnotat i planens endringslogg med:
+
+1. Utløst kriterium og konkrete resultater.
+2. Hvilken forutsetning eller konklusjon som er berørt.
+3. Hvilke valideringsresultater som allerede er sett.
+4. Foreslått avklaring eller ny, avgrenset protokoll.
+
+En faktisk implementeringsfeil kan rettes og det samme låste løpet kjøres på nytt, med sporbar forklaring. En metodisk endring etter at resultatene er sett krever brukerens godkjenning og ny protokollversjon. Resultatene fra den opprinnelige protokollen beholdes.
+
+De samme foldene blir ikke «nye» eller uavhengige ved å bytte seed. Revidert modellering på samme utviklingsdata må omtales som videre utviklingsarbeid.
+
+Storskadeproblemer kan begrunne en separat plan, men denne planen autoriserer **null halebehandlinger**. En eventuell senere behandling må ha egne støttekrav, treningsfoldbasert estimering og evaluering mot ukappet kostnad, med overskytende kostnad inkludert i forventningen.
+
+## 4. Implementering, grensesnitt og verifikasjon
+
+### Ansvarsdeling mellom agenter
+
+Senioransvarlig eier protokollen, avviksvurderingen og den endelige faglige konklusjonen. Implementerende agenter skal ikke overstyre låste regler.
+
+Arbeidet deles i tre avgrensede leveranser:
+
+1. **Data og sikker kjøring:** Utviklingsdataflyt, avstemming, kontroller og kompatible rad-/foldnøkler.
+2. **Modellering:** Kandidatregister, Gamma-modeller, CV og den eksakte seleksjonsalgoritmen.
+3. **Diagnostikk og uavhengig kontroll:** Tabeller, plott, bootstrap, tidskontroll og etterprøving av implementasjonen.
+
+Agentene får konkrete filområder. Bare én agent redigerer modellnotebooken om gangen. Hver leveranse skal kunne verifiseres før neste avhengige leveranse starter.
+
+### Kodeplassering og nødvendige grensesnitt
+
+- Modellspesifikasjoner, kandidatregister, preprocessingregler, CV-definisjon og seleksjonsalgoritme ligger i `glm_pricing_models.py`.
+- Diagnostikk og presentasjon kan legges i beskrivende moduler under `src/`.
+- Felles utviklingsinnlesing legges i `src/model_data.py`, med en egen utviklingsfunksjon som ikke returnerer eller transformerer en testramme.
+- Begge hovednotebookene bruker den sikre utviklingsflyten. Eksisterende celler som inspiserer teståret må ikke kjøres.
+
+CV-resultatet skal minst inneholde:
+
+- Kandidat-ID og full spesifikasjon.
+- OOF-severity for alle poliseår, med entydig radnøkkel og fold-ID.
+- Markering av radene som inngår i severity-scoren.
+- Foldscore, samlet score, parametertall og gyldighetsstatus.
+- Årsak til eventuell forkasting og en maskinlesbar seleksjonslogg.
+- Treningsfoldens skadeantall i henholdsvis positivt utvalg og alle skadeår.
+
+Til senere frekvens–severity-sammenkobling dokumenteres at F5 inkluderer de ti skadene i utelatte kostnadsår. En eventuell korreksjon må bygge på **skadeantall**, ikke andel rader, og læres i treningsfolden. Fullutvalgets forhold er omtrent `9979/9989 = 0,998999`. Dette er en mulig porteføljekorreksjon, ikke en identifisert individuell sannsynlighet for positiv skade. Selve sammenkoblingen og dens segmentantakelser avgjøres i fase 3.
+
+### Obligatoriske tester
+
+Testene skal særlig beskytte metode og datagrenser:
+
+- Syntetiske 2024-rader med endrede utfall og kovariater påvirker ikke utviklingsramme, renselogger eller transformasjoner.
+- Ingen person overlapper mellom trening og validering; alle utviklingsrader får nøyaktig én OOF-prediksjon.
+- Endringer i valideringsdata påvirker ikke treningsmedianer, splineknuter eller estimerte parametere.
+- Responsmasken, skadevektene og den vektede severityen reproducerer kontrolltallene.
+- Seter 4, 5 og 6 havner i riktig kategori. Ingen alternativ binning introduseres.
+- Aldersbasisene har riktig antall kolonner og full rang sammen med intercept.
+- Kandidatregisterets kategorinivåer, referansenivåer og parametertall kontrolleres i foldvise designmatriser før første kandidatfit.
+- Egen beregning av pooled Gamma-deviance samsvarer med bibliotekets score.
+- Parvis cluster-SE bruker Gamma-bidrag og korrekt fortegn.
+- Seleksjonen testes med syntetiske scorer for likhet, terskelgrenser, færre parametere, ugyldige kandidater, geografisærregelen og forkastet kombinasjon.
+- Geografisærregelen testes når G1 er gyldig, men ikke kvalifiserer mot S0; når G1 er ugyldig; og når G2 slår G1, men ikke består forbedringskravet mot S0.
+- Forenklingsregelen testes med en kandidat som består pooled tapsgrenser, men taper i tre av fem folder: Den skal ikke forkastes av et utilsiktet krav om foldflertall.
+- Små valideringssegmenter beholder observasjonene i pooled score, men rapporteres med støtteforbehold; de særskilte 100-personerskravene kontrolleres på riktig OOF-/årspopulasjon.
+- Kandidatbudsjettet overskrides ikke, og en stopp utløser ingen automatisk ny søkerunde.
+- OOF-prediksjoner kan kobles til F5 uten manglende eller dupliserte nøkler.
+
+Frekvensens tidligere kontroll av robuste standardfeil for Poisson skal ikke fremstilles som en verifikasjon for Gamma. Eventuell koeffisientinferens krever separat kontroll; den brukes ikke til variabelvalg.
+
+Notebookene redigeres gjennom `.py`, synkroniseres med `uv run jupytext --sync ...` og kjøres med den sikre utviklingsflyten. Endringer i det felles datagrunnlaget verifiseres i begge hovednotebookene. Bevar eksisterende brukerendringer.
+
+Før hver modelltilpasning dokumenteres modell-likningen og antakelsene i en kort markdown-celle. Hver outputseksjon får maksimalt én tabell og ett plott, eventuelt med flere delpaneler.
+
+## 5. Gjennomføringsrekkefølge og ferdigkriterier
+
+**Trinn 1 — Protokoll og datakontroll.** Opprett den separate planen, registrer brukerbeslutningene og de nye tallgrensene, rett dokumentasjonsfeil og etabler sikker utviklingsinnlesing. Logg at vanlig gruppe-CV erstatter den tidligere foreslåtte nestingen.
+
+**Trinn 2 — Diagnostikk før fitting.** Avstem respons, kategoristøtte, små beløp og kostnadskonsentrasjon. Kontroller først kategorinivåer, referansenivåer, parametertall og rang i de foldvise designmatrisene. Avklar eventuelle datastopp før kandidatmodellene kjøres.
+
+**Trinn 3 — Låst Gamma-løp.** Kjør de ti spesifikasjonene og høyst én kombinert kandidat. Lagre alle resultater, inkludert forkastede kandidater, og avslutt seleksjonen etter algoritmen.
+
+**Trinn 4 — Diagnostikk etter seleksjon.** Gjennomfør EUR-kalibrering, bootstrap, innflytelse, `N=1`-kontroll, kollinearitets-/fortolkningsdiagnostikk, tidskontroll og miksstandardisering. Utløste faglige stopp behandles før sluttmodellen godkjennes.
+
+**Trinn 5 — Sluttfit og leveranse.** Når kontrollene er avklart, fit den valgte Gamma-spesifikasjonen på alle 5 698 positive skadeår. Behold S0 som dokumentert referanse. Lever formel, preprocessing, OOF-resultater, diagnostikk, beslutningslogg og begrensninger.
+
+Sluttleveransen skal eksplisitt beskrive:
+
+- Den tilsiktede preferansen for enklere modeller, også når de ikke forbedrer alle eller flertallet av foldene.
+- At bare én samlet C1 testes. Hvis tre blokker velges, testes ikke alle to-av-tre-kombinasjoner; en bedre delkombinasjon kan derfor forbli uoppdaget. Det hevdes ikke at finalisten er best blant alle mulige kombinasjoner.
+- Seleksjonsoptimismen fra gjentatt bruk av samme CV-observasjoner gjennom hele beslutningskjeden. 1-SE-/0,5 %-heuristikken gir ingen samlet feilratekontroll eller uavhengig evaluering av vinneren.
+- At tidskontrollen omfatter én kalenderovergang, og at manglende påvist forverring ikke dokumenterer tidsstabilitet.
+- Eventuell usikker fortolkning av korrelerte variabelblokker og hvilke valideringssegmenter som er for svakt støttet til egne konklusjoner.
+
+**Trinn 6 — Separat beslutning om Inverse Gaussian.** Etter ferdig Gamma-leveranse kan brukeren godkjenne én IG-utfordrer med samme låste prediktorer og funksjonsformer. Ingen ny featureseleksjon. Ved godkjenning brukes samme gruppefolder, Gamma-score og forbedringsregel mot Gamma-finalisten, etterfulgt av samme relevante diagnostikk. Uten godkjenning slutter arbeidet ved Gamma-leveransen.
+
+Fasen er ferdig når implementeringen er verifisert, seleksjonen kan reproduseres, alle stopp er avklart eller tydelig dokumentert som uavklarte, og konklusjonene samsvarer med resultatene.
+
+**Rapporteringsgrensen er bindende:** Kandidatene er valgt med de samme gruppefoldene som brukes til å rapportere utviklingsscore. Derfor skal gevinsten ikke omtales som en uavhengig evaluering av seleksjonsprosedyren. Tidligere EDA og tidligere dokumentert innsyn i aggregerte testresultater oppheves heller ikke av denne protokollen. Ingen ny 2024-evaluering inngår; den krever senere eksplisitt godkjenning etter at modellspesifikasjonene er låst.
+
+## Endringslogg
+
+| Dato | Fase | Endring og begrunnelse |
+|---|---|---|
+| 2026-09-18 | Planrevisjon før severity-implementering | Presisert G1s rolle som gyldig, men ikke nødvendigvis kvalifisert referanse for G2; tilsiktet asymmetri i forenklingsregelen; kollinearitetsdiagnostikk uten seleksjonsvirkning; begrensningen ved én kalenderovergang; utestede delkombinasjoner; og seleksjonsoptimisme gjennom hele beslutningskjeden. Flyttet kontroll av parametertall/nivåer eksplisitt foran første fit og avklart treningens støttekrav mot valideringens diagnostiske støtte. Utvidet verifikasjons- og leveransekravene og rettet dokumentets filhenvisning. Kandidatrom, tallgrenser og modellbudsjett er uendret. |

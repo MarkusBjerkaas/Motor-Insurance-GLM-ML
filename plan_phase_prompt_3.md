@@ -99,15 +99,17 @@ vi kunne spesifisere faglig på forhånd?**
 Nestet gruppe-CV skal evaluere seleksjonsprosessen.
 Litteraturbaselinen gir samtidig et selvstendig referansepunkt.
 
-## Litteraturforankret baseline
+## Litteraturforankret baseline (ALLEREDE GJENNOMFØRT OG FINNES I MAPPEN SEVERITY LITTERATURGJENNOMGANG)
 
-Brukeren har godkjent følgende arbeidsform:
+DETTE ER ALLEREDE GJENNOMFØRT OG FUNNENE FINNES I SEVERITY LITTERATURGJENNOMGANG MAPPEN.
 
-- Deleger et grundig, avgrenset litteratursøk til **Luna** når planarbeidet starter.
+Viktig: Vi er opptatt av prediksjon her, så sammenhengen i artikkelene behøver ikke være kausal.
+
+Mål med litteraturgjennomgangen:
 - Undersøk severity-drivere i motorforsikring.
 - Prioriter spanske studier der relevante studier finnes.
 - Sammenlignbar dekning og responsdefinisjon veier tyngre enn geografi alene.
-- Hovedagenten vurderer kildene og deres overførbarhet.
+- Din jobb er å validere at tolkningen fra disse artikkelene faktisk stemmer.
 - Brukeren skal godkjenne baseline-variabler og funksjonsformer før nye
   kandidater testes mot CV-foldene.
 
@@ -137,6 +139,10 @@ Ikke likestill manglende litteraturstøtte med manglende prediktiv verdi.
 Litteraturbaselinen er forhåndsdefinert for kommende modellering, men prosjektet
 har allerede brukt 2022–2023 i EDA og referansemodeller. Ikke kall den fullstendig
 uavhengig av tidligere datainnsikt.
+
+## Variabel seleksjon i grunn spesifikasjonen:
+
+Grunnspesifikasjonen skal også inkludere variabler som ser særlig lovende ut basert på både den deskriptive analysen og litteraturgjennomgangen.
 
 ## Seleksjonsprosedyre: godkjent motforslag
 

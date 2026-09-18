@@ -10,6 +10,9 @@ Alt skal være på norsk - med unntak av variabel definisjoner som presisert i g
 
 GLM/ML/credibility-modellering på motorforsikringsdata. Portefølje-prosjekt for en karriere innen modellering, maskinlæring og statistikk i forsikringsunderwriting — skal vise at jeg kan kode, forstår modellene, og forstår et data science-løp. Python, `uv` for miljø/dependencies, `statsmodels`/`sklearn`/relevante credibility-pakker, `jupytext` for notebook-speiling.
 
+## Harde begrensninger
+ALDRI! Inspisere, lese, loade, trene på, eller bruke test settet fra 2024 på noen som helst måte. Det krever eksplisitt godkjenningstempel fra meg, og skal KUN gjøres når alle modell spesifikasjonene er helt ferdig og låst.
+
 ## Filstruktur
 
 - `analysis.ipynb` — hoveddokumentet. Alt av modellspesifikasjon, loss-funksjoner og kritisk feature engineering skal ligge her (eller importeres og kjøres her). Dette er det som skal vise hva jeg kan, så det kritiske hører hjemme her, ikke gjemt i en script-fil.
@@ -37,9 +40,17 @@ Rediger **aldri** `analysis.ipynb` direkte. Rediger alltid `analysis.py` (jupyte
 - Skriv ikke modeller from scratch der et etablert bibliotek dekker det — bruk `statsmodels`, `sklearn`, eller relevante credibility-pakker.
 - Før en modell fittes: legg alltid inn en markdown-celle med modell-likningen i LaTeX og en kort forklaring, matematisk og intuitivt. Hold forklaringen kort.
 - ALDRI bruk data fra 2024 - testsettet uten at jeg har bekreftet det. 
+
 ## Kodestil
 
-Godt kommentert og lesbart — jeg skal selv enkelt forstå hva som foregår. Kompakt, men lesbart. Ingen over-engineering.
+Godt kommentert og lesbart — jeg skal selv enkelt forstå hva som foregår. Kompakt, men lesbart. Ingen over-engineering. Dersom en funksjon allerede eksisterer for det vi skal implementere, bruk denne funksjonen - eventuelt endre den slik at den passer til det aktuelle problemet. 
+
+Hold notebookene korte og oversiktlige: behold forklaringer og sentral modellkode, inkludert spesifikasjon og fitting som kjøres i notebooken; flytt støttekode til små, beskrivende funksjoner i `src/`, og unngå duplisering, unødvendige abstraksjoner og tettpakkede uttrykk. Lag 
+
+Notebooken skal inneholde korte faglige forklaringer, eksplisitte modellformler, kandidatregister, CV-/seleksjonsregler og kall som fitter modellene. Flytt løkker for gjentatte modellkjøringer, dataklargjøring, valideringssjekker, diagnostikk, tabellbygging og plotting til navngitte funksjoner i src/. Hver fase skal scripts liggende i en egen mappe. Feks src_severity for severity fasen. En notebookcelle skal gjøre én tydelig oppgave og normalt være høyst 25 kodelinjer; lengre celler skal forenkles ved å trekke ut støttekode, ikke bare deles opp. Gjenbruk eksisterende funksjoner og etablerte biblioteker før du lager nye; unngå kopiert kode og generelle rammeverk der en enkel funksjon er nok.
 
 ## Data
 Data er spansk forsikringsdata og hentet fra https://pmc.ncbi.nlm.nih.gov/articles/PMC13234478/
+
+## Rapportering av output:
+Lag korte og informative oppsummeringstabeller og plots. Maks en tabell og ett plott (flere subplots er lov) per output seksjon. 
