@@ -692,18 +692,9 @@ fold_deviance_table = build_fold_deviance_table(severity_results)
 display(fold_deviance_table.round(6))
 
 # %% [markdown]
-# **Konklusjon 4.1.** Alle ti kandidater er gyldige: de konvergerer i alle fem
-# folder og har OOF-prediksjon på samtlige 5 698 skadeår, så scorene er regnet på
-# nøyaktig de samme radene. Spennet mellom beste og dårligste kandidat er lite —
-# fra 0,7255 (G1) til 0,7304 (P3), altså 0,7 % — mens spennet *mellom folder* for
-# én og samme modell er omtrent ti ganger større (S0 varierer fra 0,668 til 0,767).
-# Foldvariasjonen dominerer altså modellvariasjonen fullstendig, og det er nettopp
-# derfor scoreforskjellene måles parvis på de samme radene i stedet for som
-# forskjeller mellom foldgjennomsnitt. Til sammenligning gir nullmodellen (felles
-# skadevektet snitt) $D_0 = 0{,}7698$, så S0 forklarer 5,3 % av Gamma-deviancen.
-# Severity lar seg med andre ord bare svakt forklare av de tilgjengelige
-# prediktorene — som forventet når frekvensen allerede har tatt ut mesteparten av
-# den systematiske variasjonen.
+# > **RESULTATPLASSHOLDER 4.1.** Fyll inn gyldighet, konvergens, OOF-dekning,
+# > scoreintervall og foldvariasjon etter at det utvidede kandidatregisteret er
+# > låst og hele løpet er kjørt på nytt.
 
 # %% [markdown]
 # ### 4.2 Kvalifisering av de ni enkeltutfordrerne mot S0
@@ -717,20 +708,9 @@ selection_table = build_selection_table(qualification_records)
 display(selection_table.round(6))
 
 # %% [markdown]
-# **Konklusjon 4.2.** Tre av ni utfordrere kvalifiserer — A1, A2 og G1 — og alle
-# tre gjør det under **forenklingsregelen**. Ikke én eneste kandidat består
-# forbedringsregelen. Grunnen er tydelig i tabellen: forbedringsterskelen er
-# $\max(\mathrm{SE},\ 0{,}005 \cdot D_{S0}) = 0{,}003645$, mens den største
-# observerte gevinsten i hele kandidatrommet er 0,003512 (G1). Med andre ord
-# ligger ingen utvidelse av S0 over 0,5 %-grensen, og de fire kandidatene som
-# legger til variabler (V3, P1, P3, T1) gir i tre av fire tilfeller *dårligere*
-# pooled score enn S0. Signalet er entydig: modellen skal ikke gjøres rikere.
-#
-# Legg merke til asymmetrien i praksis: A1 og A2 kvalifiserer med henholdsvis 2 av
-# 5 forbedrede folder. Det er tilsiktet — forenklingsregelen stiller ingen
-# foldkrav, fordi preferansen for enkelhet er avtalt på forhånd. De foldvise
-# forskjellene vises likevel (tabellen over), slik at leseren ser at gevinsten er
-# ujevnt fordelt.
+# > **RESULTATPLASSHOLDER 4.2.** Fyll inn hvilke enkeltutfordrere som
+# > kvalifiserer, hvilken regel de består, tersklene og foldfordelingen etter den
+# > reviderte kjøringen.
 
 # %% [markdown]
 # ### 4.3 Geografisærregelen: G2 mot både S0 og G1
@@ -774,12 +754,8 @@ if geography["kvalifiserer"]:
 print("kvalifiserte enkeltutfordrere:", sorted(qualified) or "ingen")
 
 # %% [markdown]
-# **Konklusjon 4.3.** G2 — kommunetype *og* kjøresone samtidig — faller på begge
-# krav. Mot S0 er gevinsten 0,001154, under terskelen 0,003645; mot G1 taper G2
-# faktisk score. Det betyr at når kjøresone først er med, tilfører kommunetype
-# ingenting, og de to geografivariablene måler i praksis den samme underliggende
-# by/land-dimensjonen. Dette er en substansiell konklusjon, ikke bare en
-# terskelmekanikk: vi skal velge én geografivariabel, ikke to.
+# > **RESULTATPLASSHOLDER 4.3.** Fyll inn utfallet av geografisærregelen mot
+# > både S0 og G1 etter den reviderte kjøringen.
 
 # %% [markdown]
 # ### 4.4 Blokkvalg
@@ -811,18 +787,8 @@ changed_blocks = {b: c for b, c in block_choices.items() if c != "S0"}
 print("endrede blokker:", changed_blocks or "ingen")
 
 # %% [markdown]
-# **Konklusjon 4.4.** To blokker endres: alder går fra spline df3 til lineær (A1),
-# og geografi bytter kommunetype med kjøresone (G1). Verdi, ytelse og seter blir
-# stående uendret, siden ingen av utfordrerne der kvalifiserte.
-#
-# G1 fortjener en kommentar. Den har den klart største enkeltgevinsten i hele
-# kandidatrommet (0,003512 mot S0, forbedring i 4 av 5 folder) — men den ville
-# **så vidt** ikke bestått forbedringsregelen, som krever mer enn 0,003645. At den
-# likevel kvalifiserer, skyldes at den har færre parametere enn S0 og dermed
-# vurderes etter forenklingsregelen. Det er en påminnelse om hvor grovt
-# tersklene virker: den samme kandidaten hadde blitt forkastet om den hadde kostet
-# én parameter mer. Vi noterer det som en beslutningsgrense, ikke som et argument
-# for å justere terskelen etter at resultatene er sett.
+# > **RESULTATPLASSHOLDER 4.4.** Fyll inn blokkvalgene, hvilke blokker som
+# > endres, og eventuelle resultater nær beslutningsgrensene etter ny kjøring.
 
 # %% [markdown]
 # ### 4.5 Kombinert kandidat C1
@@ -903,16 +869,9 @@ else:
 print("C1 kvalifiserer:", c1_qualifies)
 
 # %% [markdown]
-# **Konklusjon 4.5.** C1 kombinerer lineær alder og kjøresone, og ender på **seks**
-# parametere — tre færre enn S0. Den har lavest pooled deviance av alle elleve
-# kandidatene (0,724835) og består forenklingsregelen mot alle tre referansene: S0
-# (gevinst 0,004170, SE 0,002203, 4 av 5 folder), A1 (0,003434, SE 0,001844, 4 av
-# 5) og G1 (0,000658, SE 0,000649, 3 av 5). Gyldighetsporten er kjørt på nytt for
-# C1 før fitting: full rang i alle folder og minste kategoristøtte 1 239 personer.
-#
-# Det uvanlige her er at den beste modellen også er den enkleste. Mesteparten av
-# gevinsten kommer fra geografibyttet; aldersforenklingen koster nesten ingenting.
-# Budsjettet er brukt fullt ut: 55 av 55 hovedtilpasninger.
+# > **RESULTATPLASSHOLDER 4.5.** Fyll inn den kombinerte kandidatens termer,
+# > parametertall, gyldighet, parvise sammenligninger og faktisk brukt
+# > modellbudsjett etter ny kjøring.
 
 # %% [markdown]
 # ### 4.6 Finalist
@@ -933,31 +892,18 @@ print(f"Finalist: {FINALIST} — {finalist_choice['begrunnelse']}")
 print("Nesten like:", finalist_choice["nesten_like"])
 
 # %% [markdown]
-# **Konklusjon 4.6 — seleksjonen er avsluttet.** Finalisten er **C1**: produkt + år
-# + kjøresone + lineær alder + lineær log-bilverdi, seks parametere.
+# > **RESULTATPLASSHOLDER 4.6.** Fyll inn finalist, formel, parametertall,
+# > nesten-like-vurdering, gevinst mot S0 og en nøktern faglig tolkning etter at
+# > det utvidede kandidatløpet er avsluttet.
+
+# %% [markdown]
+# ### 4.7 Resultater fra det reviderte kandidatløpet
 #
-# C1 er eneste kandidat innenfor både 1 SE og 0,5 % av beste score. G1 ligger
-# nærmest, på 1,014 SE — akkurat utenfor. Det er en knivsegg, men uten praktisk
-# betydning: hadde G1 kommet innenfor, ville nesten-like-regelen uansett valgt
-# færrest parametere, og det er fortsatt C1. Valget er dermed robust mot hvilken
-# side av 1-SE-grensen G1 havner på.
-#
-# **Hva dette faktisk betyr, og hva det ikke betyr.** C1 forklarer 5,9 % av
-# Gamma-deviancen mot nullmodellen, S0 forklarer 5,3 %. Hele kandidatsøket flytter
-# altså scoren med drøyt en halv prosent relativt. $z$-verdien for C1 mot S0 er
-# 1,89 — og det er verdt å være tydelig på at dette **ikke** er en signifikanstest:
-# 0,5 %-grensen og 1-SE-regelen er konservative beslutningsheuristikker, brukt
-# gjentatte ganger på de samme valideringsradene gjennom kvalifisering,
-# geografiregel, blokkvalg, kombinasjonskontroll og finalistvalg. Beslutningene er
-# avhengige, og cluster-SE korrigerer verken for denne seleksjonsoptimismen eller
-# for parameterusikkerheten i selve treningen. Gevinsten på 0,004 kan derfor
-# overvurdere hva vi faktisk vinner på nye data.
-#
-# Den faglige konklusjonen er likevel entydig i retning, om ikke i størrelse:
-# severity lar seg dårlig differensiere i dette datasettet, og hver gang vi ga
-# modellen mulighet til å bli rikere — aldersspline, verdispline, ytelse, seter,
-# dobbel geografi — ble den ikke bedre. Søket er avsluttet her; ingen nye
-# kandidater prøves, og C1 splittes ikke opp.
+# Denne seksjonen skal skrives etter den nye kjøringen. Den skal samle den
+# endelige seleksjonskonklusjonen og forklare hvordan drivstoff,
+# `business_type` og betalingsfrekvens påvirket kandidatvalget. Ingen tidligere
+# finalist eller score skal kopieres inn uten at den er reprodusert av den
+# reviderte protokollen.
 
 # %% [markdown]
 # ## 5. Diagnostikk etter seleksjon
@@ -977,7 +923,7 @@ assert all(pred.notna().all() for pred in FIXED_OOF_PREDICTIONS.values())
 #
 # A/E er faktisk kostnad delt på forventet kostnad
 # $\sum_i N_i\hat\mu_i$. Desilene defineres én gang fra S0s OOF-prediksjon,
-# skadeantallsvektet, og brukes uendret for C1. `N=1` er et selektert utvalg av
+# skadeantallsvektet, og brukes uendret for finalisten. `N=1` er et selektert utvalg av
 # skadeår — ikke nødvendigvis én fysisk hendelse.
 
 # %%
@@ -1065,11 +1011,8 @@ display(stability_table.round(4))
 print(f"Vektet korr(driver_age, log_vehicle_value) = {driver_value_correlation:.6f}")
 
 # %% [markdown]
-# **Konklusjon 5.2.** Foldstabilitet og korrelasjon er fortolkningsdiagnostikk,
-# ikke automatisk variabelseleksjon. C1 inneholder ikke ytelse, så den spesifikke
-# bilverdi–ytelse-kollinearitetsbetingelsen er ikke aktuell; korrelasjonen mellom
-# alder og log-bilverdi rapporteres likevel. Eventuell ustabilitet i en enkelt
-# koeffisient må skilles fra stabiliteten i samlede prediksjoner.
+# > **RESULTATPLASSHOLDER 5.2.** Fyll inn foldstabilitet, relevante numeriske
+# > korrelasjoner og fortolkningsbegrensninger for den nye finalisten.
 
 # %% [markdown]
 # ### 5.3 Cluster-bootstrap og EUR-stopp
@@ -1146,12 +1089,12 @@ print("EUR-stopp utløst:", bool(bootstrap_stops["utløst"].any()))
 # ### 5.4 Innflytelse fra de fem dyreste personene
 #
 # I hver treningsfold fjernes de fem `insured_id` med høyest samlet registrert
-# kostnad. Med uendret modellformel refittes S0 og C1 og predikerer den
+# kostnad. Med uendret modellformel refittes S0 og finalisten og predikerer den
 # opprinnelige valideringsfolden. Dette er nøyaktig ti diagnostiske refittinger;
 # de kan ikke bli nye kandidater.
 #
 # $Y_i\sim\operatorname{Gamma}(\mu_i,\phi/N_i)$ og
-# $\log(\mu_i)=x_i^\top\beta$ for både S0 og C1. Den eneste endringen er at
+# $\log(\mu_i)=x_i^\top\beta$ for både S0 og finalisten. Den eneste endringen er at
 # de fem dyreste personene fjernes fra hver treningsfold; respons, vekt,
 # preprocessing og modellformel er ellers uendret.
 
@@ -1183,10 +1126,9 @@ print("Innflytelsesstopp utløst:", bool(influence_stops["utløst"].any()))
 display(severity_influence.plot_influence(influence_table, top_persons))
 
 # %% [markdown]
-# **Konklusjon 5.4.** Sensitiviteten gjelder kun den låste topp-fem-personer-
-# kontrollen. En liten endring i pooled forventet kostnad gjør ikke modellen
-# immun mot andre former for datasensitivitet, men en overskridelse av de faste
-# 5 %-/10 %-grensene ville stoppet sluttgodkjenningen.
+# > **RESULTATPLASSHOLDER 5.4.** Fyll inn endringen i forventet kostnad og om
+# > innflytelsesstoppet utløses for den nye finalisten. Behold forbeholdet om at
+# > dette bare er den låste topp-fem-personer-kontrollen.
 
 # %% [markdown]
 # ### 5.5 Årskontroll 2022 → 2023
@@ -1255,12 +1197,10 @@ assert not time_segment_drift["utløst"].any()
 display(time_segment_drift.round(4))
 
 # %% [markdown]
-# Segmentdrift vurderes på normalisert A/E, slik at et globalt nivåskift ikke
-# feilaktig kalles relativ drift. Q skal leses separat per segmentvariabel.
-# For skadeantallsgruppene ligger Q i denne årskontrollen omtrent mellom 1,022
-# og 1,070, avhengig av modell og nivå. Alle 95 % cluster-bootstrap-intervall
-# inkluderer 1,0, og segmentdriftstoppet utløses derfor ikke. `N=1` er et
-# selektert utvalg og ikke nødvendigvis én fysisk hendelse.
+# > **RESULTATPLASSHOLDER 5.5b.** Fyll inn normalisert A/E-forhold $Q$,
+# > bootstrapintervaller, støtte og utfallet av segmentdriftstoppet etter ny
+# > kjøring. `N=1` skal fortsatt omtales som et selektert utvalg og ikke
+# > nødvendigvis én fysisk hendelse.
 
 # %% [markdown]
 # #### 5.5c Årskostnad
@@ -1312,12 +1252,10 @@ time_segment_ae_2023 = time_segment_ae.loc[time_segment_ae["year"].eq(2023)]
 display(severity_time.plot_year_control(time_segment_ae_2023, time_level_shift))
 
 # %% [markdown]
-# **Konklusjon 5.5.** Tidsstoppregelen for finalistens pooled score og
-# segmentdriftstoppet utløses ikke; dette rapporteres som «ingen forverring
-# påvist i denne tidsdelingen». Det er én kalenderovergang, så resultatene
-# dokumenterer ikke tidsstabilitet. Årskostnad, miksstandardisering og dekning
-# er forklarende kontroller; miksstandardisering predikerer samme samlede
-# referansepopulasjon og er ikke en uavhengig validering.
+# > **RESULTATPLASSHOLDER 5.5.** Fyll inn pooled tidsresultat, globalt
+# > nivåskift, miksstandardisering, dekning og begge tidsstoppvurderingene.
+# > Konklusjonen må fortsatt presisere at én kalenderovergang ikke dokumenterer
+# > tidsstabilitet.
 
 # %% [markdown]
 # ### 5.6 Residualdiagnostikk og fortolkningsbegrensning
@@ -1335,39 +1273,18 @@ display(
 )
 
 # %% [markdown]
-# **Konklusjon 5.6.** Residualdiagnostikken brukes til å beskrive hvor
-# fortolkningsbegrensningene ligger, ikke til automatisk ny seleksjon. C1 har
-# ikke ytelse, så en spesifikk bilverdi–ytelse-betingelse kan ikke vurderes som
-# aktuell; den rapporterte alder–bilverdi-korrelasjonen og foldstabiliteten må
-# likevel tas med ved tolkning av koeffisientene. Svakt støttede segmenter skal
-# ikke alene bære en faglig konklusjon.
+# > **RESULTATPLASSHOLDER 5.6.** Beskriv residualmønstre og
+# > fortolkningsbegrensninger for den nye finalisten uten å åpne et nytt
+# > kandidatsøk. Svakt støttede segmenter skal ikke alene bære en konklusjon.
 
 # %% [markdown]
 # ## 6. Sluttfit og leveranse
 #
-# Når kontrollene i seksjon 5 er avklart, fittes den valgte spesifikasjonen på
-# **alle** 5 698 positive skadeår. S0 beholdes som dokumentert referanse.
-#
-# Finalisten C1 er en Gamma-GLM med log-link:
-#
-# $$
-# \log \mu_i \;=\; \beta_0
-#   + \beta_{\text{COMP\_N}}\,\mathbb{1}[\text{produkt}_i = \text{COMP\_N}]
-#   + \beta_{2023}\,\mathbb{1}[\text{år}_i = 2023]
-#   + \beta_{R}\,\mathbb{1}[\text{kjøresone}_i = R]
-#   + \beta_{\text{alder}}\,\text{alder}_i
-#   + \beta_{\text{verdi}}\,\log(\text{bilverdi}_i),
-# $$
-#
-# der $\mu_i$ er forventet **gjennomsnittsskade** for poliseår $i$, estimert med
-# `var_weights` $= N_i$ (antall registrerte skader). Referansenivåene er COMP_E,
-# 2022 og kjøresone U. Fordi linken er logaritmisk, er $e^{\beta}$ en
-# **multiplikativ relativitet**: en koeffisient på 0,10 betyr ca. 10,5 % høyere
-# forventet snittskade enn referansenivået, alt annet likt.
-#
-# Preprocessing er identisk med den som ble brukt i kryssvalideringen
-# (`prepare_design_frame`), men lært fra hele severity-utvalget siden det nå er
-# treningsdataene. Standardfeilene er cluster-robuste på `insured_id` (S-04).
+# > **RESULTATPLASSHOLDER 6.** Etter den reviderte seleksjonen skal denne cellen
+# > inneholde finalistens eksplisitte Gamma/log-likning, alle referansenivåer og
+# > en kort intuitiv forklaring. Sluttfitten skal fortsatt bruke alle 5 698
+# > positive skadeår, samme preprocessing og cluster-robuste standardfeil på
+# > `insured_id`; S0 beholdes som dokumentert referanse.
 
 # %%
 FINAL_SPECS = {"C1": severity_specs[FINALIST], "S0": severity_specs["S0"]}
@@ -1404,40 +1321,16 @@ final_coefficients = pd.concat(
 display(final_coefficients.round(4))
 
 # %% [markdown]
-# **Tolkning av C1-sluttfitten.** Alt annet likt er forventet registrert
-# severity for `COMP_N` omtrent 0,67 ganger nivået for `COMP_E`, for 2023
-# omtrent 0,92 ganger nivået for 2022, og for kjøresone `R` omtrent 1,11 ganger
-# nivået for `U`. Koeffisienten for `log_vehicle_value` er cirka 0,199 og kan
-# tolkes som en elastisitet: 10 % høyere bilverdi tilsvarer omtrent 1,9 % høyere
-# forventet severity. Alderseffekten er omtrent 0,999 per ekstra år, med et
-# konfidensintervall som inkluderer 1. Dette er assosiasjoner i registrert
-# `property_incurred`, ikke kausale effekter.
+# > **RESULTATPLASSHOLDER 6 — tolkning.** Tolk den nye finalistens viktigste
+# > relativiteter og intervaller etter sluttfit. Skill assosiasjon fra kausalitet
+# > og registrert `property_incurred` fra ultimate skadebeløp.
 
 # %% [markdown]
-# **Begrensninger ved sluttleveransen.** Seleksjonen har en tilsiktet preferanse
-# for enklere modeller når resultatene er tilnærmet like. Det gjelder også når
-# den enklere modellen ikke forbedrer alle, eller flertallet av, foldene; dette
-# er en forhåndslåst beslutningsregel og ikke en signifikanstest.
-#
-# Bare én kombinert kandidat, C1, ble testet. En bedre delkombinasjon kan derfor
-# være uoppdaget, og C1 hevdes ikke å være best blant alle mulige kombinasjoner.
-# De samme CV-radene ble brukt gjennom kandidatseleksjonen og rapporteringen.
-# Gevinsten er derfor seleksjonsoptimistisk og er ikke en uavhengig evaluering av
-# vinneren; 1-SE- og 0,5 %-grensene er beslutningsheuristikker uten kontrollert
-# samlet feilrate.
-#
-# Tidskontrollen dekker bare én kalenderovergang. «Ingen forverring påvist i
-# denne tidsdelingen» dokumenterer derfor ikke tidsstabilitet. Korrelasjon mellom
-# variabelblokker gjør at enkeltkoeffisienter kan være usikkert fortolket, selv
-# når samlede prediksjoner er stabile, og svakt støttede segmenter skal ikke
-# alene bære en faglig konklusjon.
-#
-# Responsen er registrert `property_incurred`, ikke ultimate skadebeløp. Den
-# rapporterte Gamma-modellen og kalibreringen gjelder derfor registrert kostnad
-# slik den foreligger i dataene. Bootstrapintervallene er betinget på faste OOF-
-# prediksjoner: de refitter ikke modellene og inkluderer ikke modell- eller
-# seleksjonsusikkerhet. Alle terskler i seleksjon og stoppregister er
-# beslutningsheuristikker, ikke signifikanstester.
+# > **RESULTATPLASSHOLDER 6 — begrensninger.** Skriv begrensningsavsnittet på
+# > nytt etter det utvidede løpet. Det skal minst dekke enkelhetspreferansen,
+# > utestede kombinasjoner, seleksjonsoptimisme, én kalenderovergang,
+# > korrelerte blokker, svake segmenter, registrert `incurred` og at
+# > bootstrapen er betinget på faste OOF-prediksjoner.
 
 # %% [markdown]
 # ## 7. Beslutningsregister
@@ -1462,7 +1355,7 @@ display(final_coefficients.round(4))
 # | S-09 | Algoritmen kjøres **én** gang i den låste rekkefølgen, med geografisærregelen for G2 og høyst én kombinert kandidat C1. Budsjett: ≤ 11 spesifikasjoner × 5 folder = ≤ 55 hovedtilpasninger. Diagnostiske refittinger føres separat og kan ikke bli kandidater. | Én gjennomkjøring uten omkamp er det som holder seleksjonsoptimismen på et nivå vi kan beskrive. Søket er avsluttet også når konklusjonen blir at S0 beholdes. | Brukerbesluttet | 2.7 |
 # | S-10 | Designmatrisene bygges og kontrolleres foldvis mot kandidatregisteret før første kandidatfit. Avvik håndteres etter S-07 — parametertall eller nivåer endres aldri stille for å få en kandidat til å passe. | Registerets nivåer, referanser og parametertall er kontrollert mot de faktiske foldvise designmatrisene før seleksjonen. | Implementert/verifisert | 3.5 |
 # | S-11 | OOF-prediksjoner lagres for **alle** poliseår i valideringsfolden, ikke bare de positive skadeårene, via et `fold_hook`. Severity-scoren beregnes fortsatt kun på det definerte positive utvalget. | Alle utviklingsrader fikk én OOF-prediksjon, slik at senere frekvens–severity-sammenkobling kan bruke komplette prediksjoner. | Implementert/verifisert | 2.3 |
-# | S-12 | C1 er låst som finalist mot S0 etter den ene forhåndsdefinerte seleksjonsgjennomføringen. | C1 hadde pooled gevinst 0,004170 mot S0 med cluster-SE 0,002203 og besto den låste finalistregelen. Ingen ny kombinasjonsrunde ble startet. | Implementert/verifisert | 4.5 |
-# | S-13 | Kalibrering, faste-OOF-bootstrap, innflytelse, residualer og korrelasjonsdiagnostikk er gjennomført etter seleksjonen. | Ingen EUR-, innflytelses-, tids- eller segmentdriftstopp ble utløst i de verifiserte kontrollene. Bootstrapen refitter ikke og er betinget på de faste OOF-prediksjonene. | Implementert/verifisert | 5.1–5.6 |
-# | S-14 | Tidskontrollen er en låst 2022→2023-kontroll uten årsledd; segmentdrift vurderes med normalisert A/E-forhold $Q$ og felles bootstrapoppsett. | Det er én kalenderovergang. Pooled tidsstopp og segmentdriftstopp utløses ikke; Q for skadeantallsgruppene ligger omtrent 1,022–1,070, med intervaller som inkluderer 1,0. | Implementert/verifisert | 5.5 |
-# | S-15 | Sluttfitten bruker de låste C1- og S0-spesifikasjonene på alle 5 698 positive skadeår, med Gamma-log-link og cluster-robuste standardfeil. | Finalisten og den dokumenterte referansen er fittet med samme preprocessing og konvergerte; koeffisienter, relativiteter og intervaller leveres i én samlet tabell. | Implementert/verifisert | 6 |
+#
+# > **RESULTATPLASSHOLDER S-12+.** Resultatavhengige beslutninger om finalist,
+# > diagnostiske stopp, tidskontroll og sluttfit skal legges til her etter at det
+# > utvidede kandidatregisteret er implementert, låst og kjørt på nytt.
