@@ -65,7 +65,7 @@ def fit_catboost_grid(
         cv=cv,
         refit=True,
         error_score="raise",
-        n_jobs=1,
+        n_jobs=-1,
     )
     search.fit(
         features,

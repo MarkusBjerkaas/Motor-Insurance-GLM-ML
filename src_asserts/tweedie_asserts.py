@@ -76,21 +76,3 @@ def assert_tweedie_fit(result, design, spec):
         result.model.offset is None and result.model.exposure is None,
         "Tweedie-modellen skal ikke ha offset eller eksponeringsledd.",
     )
-
-
-def assert_model_definition(definition, locked):
-    """Låste termer er med, ingen duplikater, og hver interaksjon har begge hovedeffektene."""
-    terms = definition["terms"]
-    require(len(terms) == len(set(terms)), f"Duplikate termer: {terms}.")
-    missing = [column for column in locked if column not in terms]
-    require(not missing, f"Låste variabler mangler i modellen: {missing}.")
-    for term in terms:
-        if isinstance(term, tuple):
-            require(
-                all(part in terms for part in term),
-                f"Interaksjonen {term} mangler en hovedeffekt.",
-            )
-    require(
-        all(column in terms for column in definition["splines"]),
-        "En spline gjelder en variabel som ikke er i modellen.",
-    )

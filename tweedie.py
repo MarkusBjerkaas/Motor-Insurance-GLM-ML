@@ -7,6 +7,10 @@
 #       format_name: percent
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
+#   kernelspec:
+#     display_name: MotorForsikring (3.12.x)
+#     language: python
+#     name: python3
 # ---
 
 # %% [markdown]
@@ -15,37 +19,59 @@
 # Tweedie-GLM er utfordreren til den todelte modellen
 # $\widehat{\text{pure premium}} = \widehat{\text{frekvens}} \times \widehat{\text{severity}}$.
 # Notebooken bruker bare utviklingsårene 2022–2023; 2024 leses aldri.
-# Beslutningene ligger i `tweedie_plan.md` (register T-01–T-09).
+# Beslutningene ligger i `tweedie_plan.md` (register T-01–T-12).
 
 # %%
+from functools import partial
+
 import pandas as pd
 import statsmodels.api as sm
 from IPython.display import display
 
-from src_asserts.common_glm_asserts import assert_valid_folds
-from src_asserts.tweedie_asserts import (
+from src_asserts.common_glm_asserts import (
+    assert_full_oof_coverage,
     assert_model_definition,
-    assert_tweedie_spec,
-    assert_valid_power,
+    assert_valid_folds,
 )
-from src_core_glm.glm_core import cross_validate_glm, glm_spec
+from src_asserts.residual_diagnostics_asserts import assert_residual_diagnostics_result
+from src_asserts.tweedie_asserts import assert_tweedie_spec, assert_valid_power
+from src_core_glm.glm_core import cross_validate_glm, fit_glm, prepare_design_frame
 from src_core_glm.model_data import add_seat_category, build_development_frames
 from src_core_glm.model_selection import (
+    build_specification,
     can_add,
+    evaluate_models_parallel,
     propose_additions,
+    propose_geography,
     propose_removals,
+    propose_spline_forms,
     run_round,
     run_stepwise,
     select_candidate_stage,
-    summarize_selection_path,
+)
+from src_core_glm.residual_diagnostics import (
+    build_residual_diagnostic_summary,
+    cross_validate_residual_catboost,
+    plot_residual_diagnostic_overview,
+)
+from src_core_glm.selection_report import (
+    build_forward_selection_table,
+    build_top_models_table,
 )
 from src_core_glm.validation import build_group_folds
+from src_frequency.frequency_diagnostics import (
+    plot_oof_residuals_against_fitted,
+    plot_oof_residuals_by_continuous_predictor,
+)
 from src_severity.severity_data import build_severity_inputs
 from src_tweedie.tweedie_data import build_tweedie_frame, summarize_tweedie_frame
+from src_tweedie.tweedie_diagnostics import tweedie_deviance_residuals
 from src_tweedie.tweedie_power import severity_implied_power
 
 SEED = 100
 N_FOLDS = 5
+SE_MULTIPLIER = 1.0  # fjerde seleksjonskrav (§4): snittgevinst > 1 standardfeil
+N_JOBS = 8  # parallelle prosesser for kandidat-CV (resultatene er de samme som med 1)
 
 # %% [markdown]
 # ## 1. Datagrunnlag
@@ -146,39 +172,15 @@ definitions = {"K0": {"terms": [*LOCKED, *CORE], "splines": {}}}
 
 
 # %%
-def interaction_factor(column):
-    """Faktor i et interaksjonsledd; kategoriske kolonner får samme referansenivå som hovedeffekten."""
-    if pd.api.types.is_numeric_dtype(model_frame[column]) and column != "year":
-        return column
-    base = model_frame.groupby(column)["total_exposure"].sum().idxmax()
-    return f"C({column}, Treatment({base!r}))"
-
-
-def formula_term(term, splines):
-    """Ett formelledd: interaksjon, spline eller vanlig kolonne."""
-    if isinstance(term, tuple):
-        return ":".join(interaction_factor(part) for part in term)
-    if term in splines:
-        return f"cr({term}, df={splines[term]}, constraints='center')"
-    return term
-
-
-# %%
 def build_tweedie_specification(name, definition, power):
     """Bygg Tweedie-spesifikasjonen (log-link, eksponeringsvekt, ingen offset)."""
-    terms = [formula_term(term, definition["splines"]) for term in definition["terms"]]
-    family = sm.families.Tweedie(var_power=power, link=sm.families.links.Log())
-    columns = [term for term in definition["terms"] if isinstance(term, str)]
-    return glm_spec(
-        name,
-        terms,
-        "pure_premium",
-        model_frame,
-        family,
-        "total_exposure",
-        power,
-        required_columns=columns,
-    )
+    settings = {
+        "y": "pure_premium",
+        "family": sm.families.Tweedie(var_power=power, link=sm.families.links.Log()),
+        "weight": "total_exposure",
+        "power": power,
+    }
+    return build_specification(name, definition, model_frame, settings)
 
 
 assert_tweedie_spec(
@@ -188,9 +190,16 @@ assert_tweedie_spec(
 # %% [markdown]
 # ## 4. Sammenligning og valg
 #
-# Alle trinn bruker den samme treleddsregelen: en kandidat velges bare hvis den har
+# Alle trinn bruker den samme firleddsregelen: en kandidat velges bare hvis den har
 # **lavere pooled OOF-deviance** enn foreldremodellen, er **bedre i minst fire av
-# fem folder** og har **gyldig fit i alle folder**.
+# fem folder**, har **gyldig fit i alle folder** og har en **snittgevinst over én
+# standardfeil**. Med $d_k$ = foreldrens minus kandidatens deviance i fold $k$ er
+# siste krav
+#
+# $$\bar d > \frac{s_d}{\sqrt{5}}, \qquad \bar d = \tfrac15\sum_k d_k.$$
+#
+# Kravet hindrer at små, støydrevne gevinster slipper inn; det er en grov
+# støyfilter, ikke en formell test (fem folder gir et usikkert $s_d$).
 #
 # | Trinn | Type | Kandidater |
 # |---|---|---|
@@ -241,25 +250,26 @@ cv_results, specifications = {}, {}
 def evaluate_model(name):
     """Bygg spesifikasjonen og kjør CV for én modelldefinisjon."""
     assert_model_definition(definitions[name], LOCKED)  # sanity-sjekk, kan fjernes
-    specifications[name] = build_tweedie_specification(
-        name, definitions[name], TWEEDIE_POWER
-    )
-    cv_results[name] = cross_validate_glm(specifications[name], model_frame, cv_folds)
+    specification = build_tweedie_specification(name, definitions[name], TWEEDIE_POWER)
+    return specification, cross_validate_glm(specification, model_frame, cv_folds)
 
 
-def select_stage(parent_name, candidate_names):
-    """Treleddsregelen for Tweedie, med låst $p$."""
-    return select_candidate_stage(
-        cv_results,
-        parent_name,
-        candidate_names,
-        model_frame["pure_premium"],
-        model_frame["total_exposure"],
-        power=TWEEDIE_POWER,
-    )
+def evaluate_models(names):
+    """Kjør CV for flere modelldefinisjoner parallelt (én prosess per kandidat)."""
+    evaluate_models_parallel(evaluate_model, specifications, cv_results, N_JOBS, names)
 
 
-evaluate_model("K0")
+# Firleddsregelen med låst p; kalles som select_stage(foreldre, kandidatnavn).
+select_stage = partial(
+    select_candidate_stage,
+    cv_results,
+    response=model_frame["pure_premium"],
+    sample_weight=model_frame["total_exposure"],
+    power=TWEEDIE_POWER,
+    se_multiplier=SE_MULTIPLIER,
+)
+
+evaluate_models(["K0"])
 
 # %% [markdown]
 # ### 4.2 Funksjonsform: alder
@@ -269,11 +279,9 @@ evaluate_model("K0")
 
 # %%
 core = definitions["K0"]
-age_alternatives = {
-    f"+alder_df{df}": {**core, "splines": {"driver_age": df}} for df in (2, 3, 4)
-}
+age_alternatives = propose_spline_forms(core, "driver_age", "alder", (2, 3, 4))
 age_model, age_table = run_round(
-    "K0", age_alternatives, definitions, evaluate_model, select_stage
+    "K0", age_alternatives, definitions, evaluate_models, select_stage
 )
 display(age_table.round(4))
 print(f"Valgt etter aldersform: {age_model}")
@@ -285,14 +293,11 @@ print(f"Valgt etter aldersform: {age_model}")
 
 # %%
 current = definitions[age_model]
-value_alternatives = {
-    "+bilverdi_df3": {
-        **current,
-        "splines": {**current["splines"], "log_vehicle_value": 3},
-    }
-}
+value_alternatives = propose_spline_forms(
+    current, "log_vehicle_value", "bilverdi", (3,)
+)
 value_model, value_table = run_round(
-    age_model, value_alternatives, definitions, evaluate_model, select_stage
+    age_model, value_alternatives, definitions, evaluate_models, select_stage
 )
 display(value_table.round(4))
 print(f"Valgt etter bilverdi: {value_model}")
@@ -306,17 +311,9 @@ print(f"Valgt etter bilverdi: {value_model}")
 
 # %%
 current = definitions[value_model]
-geography_alternatives = {
-    "+municipality_type": {**current, "terms": [*current["terms"], GEOGRAPHY]},
-    "_bytt_til_municipality_type": {
-        **current,
-        "terms": [
-            GEOGRAPHY if t == "circulation_area" else t for t in current["terms"]
-        ],
-    },
-}
+geography_alternatives = propose_geography(current, GEOGRAPHY, "circulation_area")
 geography_model, geography_table = run_round(
-    value_model, geography_alternatives, definitions, evaluate_model, select_stage
+    value_model, geography_alternatives, definitions, evaluate_models, select_stage
 )
 display(geography_table.round(4))
 print(f"Valgt etter geografi: {geography_model}")
@@ -333,7 +330,7 @@ additions_model, additions_table = run_stepwise(
     geography_model,
     propose_additions(ADDITIONAL),
     definitions,
-    evaluate_model,
+    evaluate_models,
     select_stage,
 )
 display(additions_table.round(4))
@@ -350,7 +347,7 @@ interaction_model, interaction_table = run_stepwise(
     additions_model,
     propose_additions(INTERACTIONS),
     definitions,
-    evaluate_model,
+    evaluate_models,
     select_stage,
 )
 display(interaction_table.round(4))
@@ -368,44 +365,172 @@ print(f"Ikke testet (mangler hovedeffekt): {not_tested or 'ingen'}")
 #
 # Bakover-løkke: én term fjernes om gangen fra modellen som nå er valgt (alt
 # unntatt `LOCKED`), og fjerningen beholdes bare når den oppfyller den samme
-# treleddsregelen. Gjentas til ingen fjerning består.
+# firleddsregelen. Gjentas til ingen fjerning består.
 
 # %%
 final_model, ablation_table = run_stepwise(
     interaction_model,
     propose_removals(set(LOCKED)),
     definitions,
-    evaluate_model,
+    evaluate_models,
     select_stage,
 )
 display(ablation_table.round(4))
 print(f"Valgt etter ablasjon: {final_model}")
 
 # %% [markdown]
-# ### 4.8 Sammendrag
+# ### 4.8 Forover-seleksjon: hva tilfører verdi?
 #
-# Pooled OOF-deviance for modellen som ble valgt i hvert trinn (samme $p$, samme
-# folder). Dette er utviklingsscore, ikke en uavhengig evaluering.
+# Én rad per valgt steg i funksjonsform (§4.2–4.4), tillegg (§4.5) og
+# interaksjoner (§4.6); ablasjonen (§4.7) står i sin egen tabell. `oof_deviance` er
+# pooled OOF for modellen etter steget (utviklingsscore, ikke en uavhengig
+# evaluering). `snitt_gevinst` er snittet av fold-gevinstene mot foreldremodellen,
+# `se_gevinst` er standardfeilen, og `gevinst_i_se` er forholdet mellom dem. Rundt
+# 1 er marginalt: når flere kandidater sammenlignes, ligger den beste ofte på ca.
+# 1–1,5 SE selv uten noe ekte signal. Tydelig verdi krever vesentlig mer.
 
 # %%
-selection_path = [
-    ("K0", "K0"),
-    ("alder", age_model),
-    ("bilverdi", value_model),
-    ("geografi", geography_model),
-    ("tillegg", additions_model),
-    ("interaksjoner", interaction_model),
-    ("ablasjon", final_model),
-]
 display(
-    summarize_selection_path(
-        selection_path,
-        cv_results,
-        model_frame["pure_premium"],
-        model_frame["total_exposure"],
-        TWEEDIE_POWER,
+    build_forward_selection_table(
+        [age_table, value_table, geography_table, additions_table, interaction_table]
     ).round(4)
 )
 assert_model_definition(definitions[final_model], LOCKED)  # sanity-sjekk, kan fjernes
 print("Valgt Tweedie-modell:", definitions[final_model])
 print("Spesifikasjonen er ikke låst før den er godkjent. 2024 er ikke berørt.")
+
+# %% [markdown]
+# ### 4.9 Konkurrerende modeller
+#
+# Blant alle modeller som er evaluert i seleksjonen vises de tre med lavest pooled
+# OOF-deviance. `endring` viser hva som skiller dem fra den valgte modellen,
+# `parametere` er antall koeffisienter (inkludert konstantledd) og
+# `delta_mot_valgt` er OOF-deviance minus den valgtes (negativ = lavere). Er en
+# enklere modell praktisk talt like god (liten delta målt mot SE i §4.8), er den å
+# foretrekke. En mer kompleks modell med lavere deviance er bare interessant hvis
+# forskjellen er tydelig over støyen. Tabellen er beslutningsgrunnlag og endrer ikke
+# seleksjonsregelen.
+
+# %%
+top_models = build_top_models_table(
+    cv_results,
+    definitions,
+    final_model,
+    model_frame["pure_premium"],
+    model_frame["total_exposure"],
+    TWEEDIE_POWER,
+)
+with pd.option_context("display.max_colwidth", None):
+    display(top_models.reset_index(drop=True).round(4))
+
+# %% [markdown]
+# ### 4.10 Valgt modell: koeffisienter
+#
+# Den valgte modellen estimeres på alle utviklingsdata (2022–2023) med
+# cluster-robuste standardfeil på `insured_id`, som i frekvens- og severity-notebookene.
+# Koeffisientene er log-relativiteter i dette datasettet, ikke kausale effekter.
+
+# %%
+final_specification = specifications[final_model]
+final_design = prepare_design_frame(
+    model_frame, model_frame, final_specification["required_columns"]
+)
+final_fit = fit_glm(
+    final_specification, final_design, cluster_groups=final_design["insured_id"]
+)
+display(final_fit.summary())
+
+# %% [markdown]
+# ## 5. CatBoost-diagnostikk av residualstruktur
+#
+# Vi spør om det finnes struktur i middelverdien som den valgte Tweedie-GLM-en
+# ikke fanger. CatBoost er kun en diagnose og velger aldri GLM-variabler.
+#
+# $$
+# z_i=\frac{R_i}{\hat\mu_{i,\mathrm{inner\ OOF}}},
+# \qquad
+# a_i=e_i\,\hat\mu_{i,\mathrm{inner\ OOF}}^{\,2-p},
+# \qquad
+# \hat\mu_i^*=\hat\mu_{i,\mathrm{GLM}}\,\hat h(x_i).
+# $$
+#
+# $z_i$ er observert pure premium relativt til GLM-prediksjonen (rundt 1 hvis
+# GLM-en treffer), $a_i$ er radens vekt med det låste $p$, og $\hat h(x)$ er
+# CatBoosts korreksjonsfaktor lært med Poisson-loss. **Indre CV** (fem nye
+# `insured_id`-folder inne i hver ytre treningsdel) lager $z_i$, så CatBoost
+# aldri trener på prediksjoner fra en GLM som har sett raden. **Ytre CV** måler
+# gevinsten på forsikrede CatBoost ikke har sett. Dybde 1 er additiv, dybde 3 kan
+# også fange interaksjoner.
+
+# %%
+residual_diagnostics = cross_validate_residual_catboost(
+    final_specification,
+    model_frame,
+    cv_folds,
+    final_specification["required_columns"],
+    categorical_columns=tuple(final_specification["base_levels"]),
+    blocked_feature_columns=("property_incurred", "pure_premium"),  # responsen
+    seed=SEED,
+)
+assert_residual_diagnostics_result(
+    residual_diagnostics, model_frame, cv_folds
+)  # kan fjernes
+
+# %% [markdown]
+# ### 5.1 Finnes det residualstruktur?
+#
+# Tabellen sammenligner GLM-en med en konstant korreksjon (bare nivå) og to
+# CatBoost-dybder, beregnet på alle OOF-rader. `delta_*` er reduksjon i deviance
+# (positivt er bedre), `better_than_*_folds` teller ytre folder med gevinst og
+# `oof_ae` er faktisk delt på predikert skadekostnad.
+
+# %%
+display(build_residual_diagnostic_summary(residual_diagnostics).round(4))
+
+# %%
+residual_overview_figure = plot_residual_diagnostic_overview(residual_diagnostics)
+
+# %% [markdown]
+# **Begrensning.** GLM-en er valgt ved gjentatt bruk av de samme ytre foldene.
+# Diagnostikken er derfor en utviklingsdiagnose, ikke en uavhengig test og ikke
+# en evaluering av hele seleksjonsprosedyren. Fravær av gevinst er ikke bevis for
+# fravær av struktur: skadekostnaden er skjev og dominert av få storskader, så
+# den statistiske styrken er lav.
+
+# %% [markdown]
+# ## 6. OOF-diagnostikk av Tweedie-GLM-en
+#
+# Residualene er eksponeringsvektede Tweedie deviance-residualer, beregnet fra
+# prediksjoner fra folden der poliseåret ikke inngikk i tilpasningen. Skadefrie år
+# ligger i et eget negativt bånd (residualen er da bare en funksjon av
+# $\hat\mu_i$), så spredningen er ikke normal. LOWESS-kurvene er visuelle
+# hjelpemidler, ikke hypotesetester, og bør ligge nær null.
+#
+# Frekvensnotebookens rootogram er utelatt: det teller heltallige skadeantall,
+# mens Tweedie-responsen er kontinuerlig med punktmasse i null.
+
+# %%
+oof_premium = cv_results[final_model]["oof"]
+assert_full_oof_coverage(oof_premium, model_frame.index, "Tweedie-OOF")  # kan fjernes
+oof_residuals = tweedie_deviance_residuals(
+    model_frame["pure_premium"],
+    oof_premium,
+    model_frame["total_exposure"],
+    TWEEDIE_POWER,
+)
+oof_fitted_figure = plot_oof_residuals_against_fitted(
+    oof_premium,
+    oof_residuals,
+    xlabel="OOF-predikert pure premium per eksponeringsår",
+    title="OOF deviance-residualer mot predikert pure premium",
+)
+
+# %%
+continuous_predictors = [
+    predictor
+    for predictor in ["driver_age", "log_vehicle_value", "performance_hp_per_tonne"]
+    if predictor in final_specification["required_columns"]
+]
+oof_predictor_figure = plot_oof_residuals_by_continuous_predictor(
+    model_frame, continuous_predictors, oof_residuals
+)

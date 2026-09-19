@@ -95,16 +95,16 @@ def poisson_deviance_residuals(observed_claims, expected_claims):
     return np.sign(observed - expected) * np.sqrt(2 * np.clip(contribution, 0, None))
 
 
-def plot_oof_residuals_against_fitted(oof_frequency, residuals):
-    """Tegn OOF deviance-residualer mot OOF-predikert skadefrekvens."""
+def plot_oof_residuals_against_fitted(
+    oof_frequency,
+    residuals,
+    xlabel="OOF-predikert skadefrekvens per eksponeringsår",
+    title="OOF deviance-residualer mot predikert frekvens",
+):
+    """Tegn OOF deviance-residualer mot OOF-predikert verdi (standard: frekvens)."""
     fig, axis = plt.subplots(figsize=(8.2, 4.2))
-    _plot_residuals_with_lowess(
-        axis,
-        oof_frequency,
-        residuals,
-        "OOF-predikert skadefrekvens per eksponeringsår",
-    )
-    axis.set_title("OOF deviance-residualer mot predikert frekvens")
+    _plot_residuals_with_lowess(axis, oof_frequency, residuals, xlabel)
+    axis.set_title(title)
     fig.tight_layout()
     return fig
 
@@ -190,9 +190,7 @@ def _plot_residuals_with_lowess(axis, x, residuals, xlabel):
     residuals = np.asarray(residuals, dtype=float)
     order = np.argsort(x)
     span = np.ptp(x)
-    smooth = lowess(
-        residuals[order], x[order], frac=0.25, it=0, delta=span * 0.01
-    )
+    smooth = lowess(residuals[order], x[order], frac=0.25, it=0, delta=span * 0.01)
     axis.scatter(x, residuals, alpha=0.08, s=9, color="#2f6690", linewidths=0)
     axis.plot(smooth[:, 0], smooth[:, 1], color="#d06b32", linewidth=2)
     axis.axhline(0, color="#4d4d4d", linestyle="--", linewidth=1)
