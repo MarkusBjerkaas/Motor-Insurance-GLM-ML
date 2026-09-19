@@ -17,23 +17,20 @@ import functools
 from unittest import mock
 
 import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from sklearn.metrics import mean_tweedie_deviance
 
-matplotlib.use("Agg")  # ingen skjerm nødvendig
-
-import matplotlib.pyplot as plt  # noqa: E402
-from sklearn.metrics import mean_tweedie_deviance  # noqa: E402
-
-from src_asserts.common_glm_asserts import (  # noqa: E402
+from src_asserts.common_glm_asserts import (
     assert_full_oof_coverage,
     assert_positive_finite,
     require,
 )
-from src_core_glm import residual_diagnostics as rd  # noqa: E402
-from src_core_glm.glm_core import glm_spec  # noqa: E402
-from src_core_glm.validation import build_group_folds  # noqa: E402
+from src_core_glm import residual_diagnostics as rd
+from src_core_glm.glm_core import glm_spec
+from src_core_glm.validation import build_group_folds
 
 # Små, raske CatBoost-innstillinger for testene
 FAST_PARAMS = {"iterations": 50, "thread_count": 1}
@@ -496,6 +493,13 @@ def check_interaction_needs_depth_3():
         summary.loc["catboost_depth_3", "delta_vs_depth_1"] > 0,
         "Depth 3 skal slå depth 1.",
     )
+    # Sammenligningen mot depth 1 gjelder bare depth 3-raden
+    folds_vs_depth_1 = summary["better_than_depth_1_folds"]
+    require(
+        folds_vs_depth_1["catboost_depth_3"] >= 4
+        and folds_vs_depth_1.drop("catboost_depth_3").isna().all(),
+        "better_than_depth_1_folds skal bare gjelde depth 3.",
+    )
     require(
         summary.loc["catboost_depth_3", "relative_gain_vs_glm"] > 0.02,
         "Depth 3 finner ikke interaksjonen.",
@@ -714,4 +718,5 @@ def run_residual_diagnostics_checks():
 
 
 if __name__ == "__main__":
+    matplotlib.use("Agg")  # kjøres fra terminal: ingen skjerm nødvendig
     run_residual_diagnostics_checks()

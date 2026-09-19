@@ -633,13 +633,12 @@ def build_residual_diagnostic_summary(result):
             lambda s: int((s > 0).sum())
         )
 
-    is_depth_3 = table.index == "catboost_depth_3"
-    table["delta_vs_depth_1"] = table["delta_vs_depth_1"].where(is_depth_3)
+    # Sammenligningen mot depth 1 gjelder bare depth 3 (maske på indeksnavn, ikke posisjon)
+    depth_3_only = lambda values: values.where(values.index == "catboost_depth_3")  # noqa: E731
+    table["delta_vs_depth_1"] = depth_3_only(table["delta_vs_depth_1"])
     table["better_than_glm_folds"] = better_folds("delta_vs_glm")
     table["better_than_constant_folds"] = better_folds("delta_vs_constant")
-    table["better_than_depth_1_folds"] = better_folds("delta_vs_depth_1").where(
-        is_depth_3
-    )
+    table["better_than_depth_1_folds"] = depth_3_only(better_folds("delta_vs_depth_1"))
     table["valid"] = result["valid"]
     return table.rename(
         columns={"deviance": "pooled_oof_deviance", "ae": "oof_ae"}
