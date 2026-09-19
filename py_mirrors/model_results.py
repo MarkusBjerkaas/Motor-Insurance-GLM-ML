@@ -34,8 +34,8 @@ from src_model_comparison.test_evaluation import (
 )
 
 TWEEDIE_POWER = 1.744  # samme avrundede p som i CatBoost og protokollen under
-RUN_2024_EVALUATION = False
-APPROVAL_CODE = None
+RUN_2024_EVALUATION = True  # godkjent av prosjekteier etter at alle modeller er låst
+APPROVAL_CODE = "APPROVED_2024_TEST_EVALUATION"
 
 # %% [markdown]
 # ## 1. Modellene
@@ -147,5 +147,23 @@ if RUN_2024_EVALUATION:
 #
 # ## 5. Tolkning
 #
-# Fylles ut etter at 2024-evalueringen er kjørt og resultatene er vurdert mot
-# kalibreringsplottet.
+# Modellene er evaluert én gang på 2024, og ingenting er justert etter resultatet.
+#
+# - **Deviance er praktisk talt lik.** Toleddet GLM 32,180, Tweedie-GLM 32,204 og
+#   CatBoost 32,213: forskjellen mellom best og dårligst er 0,033 (0,1 %). Uten et
+#   usikkerhetsmål og med ett testår kan ikke rangeringen tolkes som sikker.
+#   CatBoost har lavest vektet MAE (391,4 mot 396,0 og 398,2).
+# - **GLM-ene er bedre kalibrert i nivå.** Porteføljebalansen er +0,9 % (toleddet) og
+#   −0,8 % (Tweedie), mens CatBoost undervurderer med −4,0 %. Det ligner skjevheten
+#   på utviklingsdata (−3,6 % på 2023), så det er en systematisk nivåskjevhet i
+#   modellen og ikke bare årsdrift.
+# - **Alle modellene undervurderer de dyreste risikoene.** I øverste prediksjonsgruppe er
+#   observert ren premie ca. 630 mot ca. 520–560 predikert, og CatBoost ligger lavest.
+#
+# **Konklusjon.** CatBoost gir ingen målbar gevinst over GLM-ene i deviance og er dårligere
+# kalibrert i nivå. Med lav forklart varians ($D^2\approx 0{,}02$ i utvikling) er dette
+# forenlig med at signalet i dataene i hovedsak fanges av de enkle GLM-ene. De er
+# dessuten enklere å forklare og revidere, så Tweedie-GLM eller den toleddede modellen
+# er det naturlige valget; CatBoost ville trengt rekalibrering av nivået først.
+# En parvis bootstrap over polisene på testpredikasjonene er neste steg for å kvantifisere
+# om de små devianceforskjellene er noe annet enn støy.
