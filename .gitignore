@@ -1,31 +1,24 @@
-# Python-generated files
+# Publiseres: notebooks, src/, data/ (så andre kan kjøre koden) og README-figurer. Alt annet er lokalt.
+/*
+!/.gitignore
+!/README.md
+!/pyproject.toml
+!/uv.lock
+!/.python-version
+!/notebooks/
+!/src/
+!/data/
+!/docs/
+/docs/*
+!/docs/figures/
+
+# Jupytext-speil (lokale arbeidskopier av notebookene)
+notebooks/py_mirrors/
+.ipynb_checkpoints/
+
+# Python
 __pycache__/
 *.py[oc]
-build/
-dist/
-wheels/
 *.egg-info
-
-# Virtual environments
-.venv
-
-# Disposable scripts (see CLAUDE.md)
-src_temp/
-
-# Local archive of scripts not used by the published notebooks
-src_archive/
-
-# Jupytext working copies; the paired notebooks are versioned
-py_mirrors/01_descriptiv.py
-py_mirrors/02_frekvens.py
-py_mirrors/03_severity.py
-temp/py_mirrors/
-
-# Cache av CV-resultater på disk (se cross_validate_candidate)
-.cv_cache/
-
-# Local environment variables and secrets
 .env
 .env.*
-!.env.example
-.claude/handoffs/

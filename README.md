@@ -51,7 +51,7 @@ forretning. Dette er en beskrivelse av modellens segmentering, ikke kausale effe
 
 ## Frekvensdiagnostikk fra utviklingsdata
 
-Seksjon 13 i [`01_descriptiv.ipynb`](01_descriptiv.ipynb) viser skadeantallsfordelingen
+Seksjon 13 i [`01_descriptiv.ipynb`](notebooks/01_descriptiv.ipynb) viser skadeantallsfordelingen
 for 2022–2023. 89,67 % av poliseårene har null skader; gjennomsnittet er 0,1808,
 variansen 0,4682 og varians/mean 2,5896. Den sterke nullmassen og den lange, sparsomme
 halen gir overspredning relativt til Poisson. Ratingfaktorene har dermed begrenset
@@ -81,21 +81,50 @@ koeffisient. En absolutt premie krever dessuten en eksplisitt definert referanse
 
 
 
+## Worked example: fra risikoprofil til premie
+
+Begge GLM-ene har log-link og ingen interaksjoner, så hver ratingfaktor virker
+multiplikativt: ren premie er referansepremien ganget med én relativitet per faktor,
+$\widehat R=\widehat\lambda\,\widehat s=\lambda_0 s_0\prod_k r^{\lambda}_k r^{s}_k$. Tabellen
+endrer én faktor om gangen fra en typisk referanserisiko (`COMP_E`, 46 år, bilverdi
+€30 000, årlig betaling, ny forretning, urbant område) til en ung fører med dyrere bil og
+kasko uten egenandel. Verdiene er forventet skadekostnad per eksponeringsår på 2023-nivå
+fra de låste modellene.
+
+| Steg | Frekvens × | Severity × | Kombinert × | Ren premie (EUR/år) |
+|---|---:|---:|---:|---:|
+| Referanserisiko | – | – | – | 158 |
+| Kasko uten egenandel (`COMP_N`) | 3,666 | 0,674 | 2,470 | 391 |
+| Fører 22 år (mot 46) | 1,689 | 1,027 | 1,735 | 678 |
+| Bilverdi €45 000 (mot €30 000) | 1,166 | 1,086 | 1,266 | 858 |
+| Halvårlig betaling (`S`) | 1,100 | 1,000 | 1,100 | 944 |
+| Fornyet forretning (`P`) | 1,357 | 0,920 | 1,249 | **1 179** |
+
+![Vannfall fra referanserisiko til ren premie](docs/figures/worked_example.png)
+
+Frekvensen går fra 0,161 til 1,737 skader per eksponeringsår, mens severity går fra
+€981 til €679; produktet gir €1 179. `COMP_N` øker frekvensen mye, men senker severity,
+så premieeffekten er mindre enn frekvenseffekten alene tilsier. Koden kontrollerer at
+hver faktor gir samme relativitet alene som i kjeden. Profilen er i høyrisikoenden:
+`COMP_N` utgjør bare 17 % av eksponeringen i utviklingsdata, og kombinasjonen av flere
+faktorer er en modellegenskap uten interaksjonsledd, ikke en observert frekvens. Beløpet
+er ren premie uten kostnadspåslag, avkastning og margin, og ikke en tariff.
+
 ## Hva prosjektet gjør
 
-**Datagrunnlag og deskriptiv analyse** ([`01_descriptiv.ipynb`](01_descriptiv.ipynb)) — avgrenser analysen til kaskoskader for `COMP_E` og `COMP_N`, med aktiv dekning og positiv eksponering. Utvalget for 2022–2023 består av 55 246 poliseår, 37 126 eksponeringsår og 9 989 registrerte skader. `CC` holdes utenfor som en liten og uensartet produktgruppe.
+**Datagrunnlag og deskriptiv analyse** ([`01_descriptiv.ipynb`](notebooks/01_descriptiv.ipynb)) — avgrenser analysen til kaskoskader for `COMP_E` og `COMP_N`, med aktiv dekning og positiv eksponering. Utvalget for 2022–2023 består av 55 246 poliseår, 37 126 eksponeringsår og 9 989 registrerte skader. `CC` holdes utenfor som en liten og uensartet produktgruppe.
 
 **Manglende verdier og validering** — GLM-ene erstatter manglende numeriske prediktorer med medianen og behandler manglende kategorier som `MISSING`. CatBoost bruker også `MISSING` for kategorier og håndterer numeriske mangler direkte. Samme forsikringstaker holdes adskilt mellom trening og validering.
 
-**Frekvens** ([`02_frekvens.ipynb`](02_frekvens.ipynb)) — bruker en Poisson-GLM med log-link og eksponeringsvekter for å predikere forventet antall egen-skader per eksponeringsår. Dette gir samme estimering som å modellere skadeantall med logaritmen til eksponeringen som offset. Den valgte modellen har 12 parametere, inkluderer en ikke-lineær alderseffekt og `business_type`, og har OOF Poisson-deviance på 1,1222. Ingen gyldig testede interaksjoner ble valgt. CatBoost-residualdiagnostikken gir heller ikke et stabilt tegn på manglende struktur: den beste varianten forbedrer deviancen med bare 0,0003 og i tre av fem folder.
+**Frekvens** ([`02_frekvens.ipynb`](notebooks/02_frekvens.ipynb)) — bruker en Poisson-GLM med log-link og eksponeringsvekter for å predikere forventet antall egen-skader per eksponeringsår. Dette gir samme estimering som å modellere skadeantall med logaritmen til eksponeringen som offset. Den valgte modellen har 12 parametere, inkluderer en ikke-lineær alderseffekt og `business_type`, og har OOF Poisson-deviance på 1,1222. Ingen gyldig testede interaksjoner ble valgt. CatBoost-residualdiagnostikken gir heller ikke et stabilt tegn på manglende struktur: den beste varianten forbedrer deviancen med bare 0,0003 og i tre av fem folder.
 
-**Severity** ([`03_severity.ipynb`](03_severity.ipynb)) — bruker en Gamma-GLM med log-link, vektet med skadeantall, for å predikere kostnad per registrert egen-skade. Modellen bruker 5 698 poliseår med positiv skadekostnad, som omfatter 9 979 skader. Den valgte syvparametersmodellen har OOF Gamma-deviance på 0,7237 og kombineres med frekvensmodellen til en todelt modell for ren premie. CatBoost-residualdiagnostikken forverrer deviancen med 0,0022 i den mest fleksible varianten og gir ingen indikasjon på manglende struktur.
+**Severity** ([`03_severity.ipynb`](notebooks/03_severity.ipynb)) — bruker en Gamma-GLM med log-link, vektet med skadeantall, for å predikere kostnad per registrert egen-skade. Modellen bruker 5 698 poliseår med positiv skadekostnad, som omfatter 9 979 skader. Den valgte syvparametersmodellen har OOF Gamma-deviance på 0,7237 og kombineres med frekvensmodellen til en todelt modell for ren premie. CatBoost-residualdiagnostikken forverrer deviancen med 0,0022 i den mest fleksible varianten og gir ingen indikasjon på manglende struktur.
 
-**Tweedie** ([`04_tweedie.ipynb`](04_tweedie.ipynb)) — bruker en Tweedie-GLM med log-link og eksponeringsvekter, uten offset, for å predikere ren premie direkte, som ett-trinnsalternativet til frekvens $\times$ severity. Den valgte 15-parametersmodellen bruker $p = 1{,}744$ og har OOF Tweedie-deviance på 33,2572. CatBoost-residualdiagnostikken reduserer deviancen med 0,0061 (0,018 %) i fire av fem folder. Det er et svakt signal om gjenværende kompleksitet, men påviser ikke en bestemt interaksjon eller ikke-linearitet og endrer ikke modellen.
+**Tweedie** ([`04_tweedie.ipynb`](notebooks/04_tweedie.ipynb)) — bruker en Tweedie-GLM med log-link og eksponeringsvekter, uten offset, for å predikere ren premie direkte, som ett-trinnsalternativet til frekvens $\times$ severity. Den valgte 15-parametersmodellen bruker $p = 1{,}744$ og har OOF Tweedie-deviance på 33,2572. CatBoost-residualdiagnostikken reduserer deviancen med 0,0061 (0,018 %) i fire av fem folder. Det er et svakt signal om gjenværende kompleksitet, men påviser ikke en bestemt interaksjon eller ikke-linearitet og endrer ikke modellen.
 
-**CatBoost** ([`05_catboost.ipynb`](05_catboost.ipynb)) — er maskinlæringsutfordreren som bruker Tweedie-tapsfunksjon til å predikere ren premie direkte. Den oppnår pooled OOF-deviance på 33,2775 mot 34,0919 for nullmodellen ($D^2 = 0,0239$). Dette er en utviklingsscore, ikke en endelig testscore.
+**CatBoost** ([`05_catboost.ipynb`](notebooks/05_catboost.ipynb)) — er maskinlæringsutfordreren som bruker Tweedie-tapsfunksjon til å predikere ren premie direkte. Den oppnår pooled OOF-deviance på 33,2775 mot 34,0919 for nullmodellen ($D^2 = 0,0239$). Dette er en utviklingsscore, ikke en endelig testscore.
 
-**Endelig sammenligning** ([`model_results.ipynb`](model_results.ipynb)) — når alle spesifikasjoner er låst, lastes de refittede modellene og vurderes én gang på 2024 som et urørt out-of-sample-testsett. Sammenligningen vurderer både prediktiv rangering og kalibrering av ren premie, og brukes til å skille mellom modeller med tilnærmet like resultater på ett enkelt kriterium.
+**Endelig sammenligning** ([`model_results.ipynb`](notebooks/model_results.ipynb)) — når alle spesifikasjoner er låst, lastes de refittede modellene og vurderes én gang på 2024 som et urørt out-of-sample-testsett. Sammenligningen vurderer både prediktiv rangering og kalibrering av ren premie, og brukes til å skille mellom modeller med tilnærmet like resultater på ett enkelt kriterium.
 
 ---
 ## Variabelseleksjon
@@ -155,17 +184,35 @@ Alder utfordres med naturlige kubiske splines med 2, 3 og 4 frihetsgrader fordi 
 - Rå `vehicle_value`, `power_to_weight_ratio` og `vehicle_brand` erstattes av transformerte modellvariabler. ID-er, utfall, premier og eksponering brukes aldri som prediktorer.
 ## Repo-struktur
 
-Oversikten er begrenset til notebooks og `src_*`-støtteskript.
+```text
+notebooks/          01_descriptiv → 05_catboost, model_results (kjøres i denne rekkefølgen)
+src/
+  core_glm/         dataforberedelse, GLM-grunnmur, gruppe-CV og seleksjon
+  descriptives/     datakvalitet, dekning og porteføljebeskrivelser
+  frequency/  severity/  tweedie/   diagnostikk og støttefunksjoner per GLM-fase
+  ml/               CatBoost-prising
+  model_comparison/ låste modeller, bootstrap, kalibrering, worked example og figurer
+  asserts/          kontroller av modeller og diagnostikk
+  paths.py          prosjektstier (data, modeller, figurer)
+data/               spansk motorforsikringsdatasett og variabelbeskrivelse
+docs/figures/       figurene som vises i denne README-en (skrives av model_results)
+```
 
-| Område | Innhold | Ansvar |
-|---|---|---|
-| Notebooks | `01_descriptiv`–`05_catboost`, `model_results` | Analyse, spesifikasjon, modellering og låst testevaluering |
-| `src_core_glm/` | Dataforberedelse, GLM-grunnmur, CV og seleksjon | Felles modellinfrastruktur |
-| `src_descriptives/` | Datakvalitet, dekning og porteføljebeskrivelser | Deskriptiv analyse |
-| `src_frequency/`, `src_severity/`, `src_tweedie/` | Modellspesifikke diagnostikk- og støttefunksjoner | GLM-fasene |
-| `src_ml/` | CatBoost-prising | Maskinlæringsutfordrer |
-| `src_model_comparison/` | Låste modeller, bootstrap, kalibrering og figurer | Endelig modellsammenligning |
-| `src_asserts/` | Modell- og diagnostikktester | Verifikasjon |
+Notebookene inneholder forklaringer, modellformler, spesifikasjon og fitting. Løkker,
+diagnostikk, tabeller og plott ligger i `src/`.
+
+## Kjør prosjektet
+
+```bash
+uv sync                                   # miljø og editable install av src/
+uv run jupyter lab                        # åpne notebooks/ og kjør 01 → 05 → model_results
+```
+
+`02_frekvens` til `05_catboost` låser hver sin modell og lagrer den i `models/`
+(opprettes automatisk; mappen versjoneres ikke). `model_results` laster de fire
+låste modellene og evaluerer dem på 2024. Alle stier løses fra prosjektroten via `src/paths.py`,
+så notebookene fungerer uansett arbeidsmappe. `02_frekvens` tar ca. 7 minutter; CatBoost-
+tuningen i `05_catboost` er den tyngste kjøringen.
 
 ## Videre arbeid og begrensninger
 
