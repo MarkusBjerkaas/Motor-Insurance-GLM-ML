@@ -18,7 +18,7 @@
   ],
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
-    "COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/home/vscode/.copilot/instructions",
+    "COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/workspaces/MotorForsikring",
     "UV_CACHE_DIR": "/home/vscode/.cache/uv"
   },
   "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude /home/vscode/.copilot /home/vscode/.cache /home/vscode/.codex && sudo chown -R vscode:vscode $(npm root -g)/@anthropic-ai && uv python install 3.12 && ([ -f pyproject.toml ] || uv init --no-package) && git config --global user.name 'Markus' && git config --global user.email 'markus.bjerkas@student.nhh.no' && npm install -g @openai/codex@latest && sudo chown -R vscode:vscode $(npm root -g)/@openai && [ -f /home/vscode/.codex/config.toml ] || echo 'project_doc_fallback_filenames = [\"CLAUDE.md\"]' > /home/vscode/.codex/config.toml && ln -sf /home/vscode/.claude/CLAUDE.md /home/vscode/.codex/AGENTS.md && bash .devcontainer/configure-copilot.sh",

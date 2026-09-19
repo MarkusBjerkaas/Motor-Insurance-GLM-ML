@@ -12,6 +12,7 @@ GLM/ML/credibility-modellering på motorforsikringsdata. Portefølje-prosjekt fo
 
 ## Harde begrensninger
 ALDRI! Inspisere, lese, loade, trene på, eller bruke test settet fra 2024 på noen som helst måte. Det krever eksplisitt godkjenningstempel fra meg, og skal KUN gjøres når alle modell spesifikasjonene er helt ferdig og låst.
+- 2024 vil bli brukt som out of sample evaluering når alle modellene er ferdig spesifisert. 
 
 ## Filstruktur
 

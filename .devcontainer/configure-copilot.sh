@@ -12,13 +12,26 @@ mkdir -p "$instructions_dir"
 ln -sfn "$global_claude_file" "$global_copilot_file"
 
 cat > "$settings_instruction_file" <<'EOF'
-# Claude project settings
+# Project lifecycle settings
 
-Treat `.claude/settings.json` as the authoritative project configuration for
-Claude Code. Preserve and follow the repository's existing hooks, permissions,
-and other project conventions when making changes. Copilot cannot execute
-Claude Code settings directly, so use this file as project context rather than
-trying to translate it into Copilot tool permissions.
+The repository's notebook lifecycle hook is
+`.codex/hooks/sync_analysis_py.py`. Claude Code and Codex run equivalent
+project hooks automatically. Copilot CLI must use the same hook explicitly:
+before inspecting or editing repository files, run
+
+```bash
+printf '{"cwd":"%s"}\n' "$PWD" | /usr/bin/python3 .codex/hooks/sync_analysis_py.py
+```
+
+Run it from the repository root. It updates a paired `.py` mirror only when
+the corresponding `.ipynb` file is newer. Do not edit paired `.ipynb` files
+directly; edit the percent-format `.py` source and synchronize it back with
+`uv run jupytext --sync <source>.py` after changes.
+
+Preserve the repository's existing Claude and Codex hooks, permissions, and
+other project conventions. This instruction is the Copilot-compatible bridge
+to those project hooks; it does not make Copilot execute Claude settings
+automatically.
 EOF
 
 chown -R vscode:vscode /home/vscode/.copilot
