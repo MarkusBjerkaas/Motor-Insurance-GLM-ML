@@ -129,6 +129,65 @@ def build_calibration_table(test_frame, predictions, n_bins=10):
     return pd.concat(tables, ignore_index=True)
 
 
+def build_top_decile_component_summary(test_frame, frequency_model, severity_model):
+    """Dekomponer toppdesilens rene premie i frekvens og rapportert severity.
+
+    Desilen defineres av den toleddede modellens predikerte rene premie. Severity
+    er kostnad per *rapportert* skade og predikeres vektet med forventet skadeantall.
+    """
+    exposure = test_frame["total_exposure"]
+    observed_claims = test_frame["property_claims"]
+    observed_cost = test_frame["property_incurred"]
+    frequency = pd.Series(frequency_model(test_frame), index=test_frame.index)
+    severity = pd.Series(severity_model(test_frame), index=test_frame.index)
+    premium = frequency * severity
+    group = pd.qcut(premium.rank(method="first"), q=10, labels=False)
+    top = group.eq(group.max())
+
+    expected_claims = (exposure[top] * frequency[top]).sum()
+    expected_cost = (exposure[top] * premium[top]).sum()
+    actual_claims = observed_claims[top].sum()
+    actual_cost = observed_cost[top].sum()
+    values = {
+        "Frekvens": (expected_claims / exposure[top].sum(), actual_claims / exposure[top].sum()),
+        "Rapportert severity": (expected_cost / expected_claims, actual_cost / actual_claims),
+        "Ren premie": (expected_cost / exposure[top].sum(), actual_cost / exposure[top].sum()),
+    }
+    summary = pd.DataFrame.from_dict(
+        values, orient="index", columns=["Predikert", "Observert"]
+    )
+    summary["A/E"] = summary["Observert"] / summary["Predikert"]
+    return summary
+
+
+def build_top_decile_profile(test_frame, premium_prediction):
+    """Sammenlign modellens høyeste prediksjonsdesil med resten av porteføljen.
+
+    Profilen bruker bare tydelige, observerbare modellprediktorer og beskriver
+    sammensetning; den tolker ikke sammenhengene kausalt.
+    """
+    prediction = pd.Series(premium_prediction, index=test_frame.index)
+    group = pd.qcut(prediction.rank(method="first"), q=10, labels=False)
+    top = group.eq(group.max())
+    exposure = test_frame["total_exposure"]
+    characteristics = {
+        "Kasko uten egenandel (COMP_N)": test_frame["policy_type"].eq("COMP_N"),
+        "Urban bruk": test_frame["circulation_area"].eq("U"),
+        "Fornyet portefølje": test_frame["business_type"].eq("P"),
+        "Kvartalsvis betaling": test_frame["payment_frequency"].eq("Q"),
+    }
+    rows = []
+    for label, member in characteristics.items():
+        rows.append(
+            {
+                "Kjennetegn": label,
+                "Høyeste desil": exposure[top & member].sum() / exposure[top].sum(),
+                "Øvrige 90 %": exposure[~top & member].sum() / exposure[~top].sum(),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def plot_test_comparison(summary, calibration):
     """Vis én kompakt figur: kalibrering og total porteføljebalanse."""
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.5))

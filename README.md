@@ -5,7 +5,7 @@ Dette prosjektet presenterer et rammeverk for forsikringsprising basert på et a
 Jeg bygger et frekvens-severity-rammeverk basert på Generalized Linear Models (GLM) for å beregne ren premie. I tillegg inkluderer jeg en Tweedie GLM som modellerer ren premie direkte, samt CatBoost som modellerer teknisk premie direkte. Modellene evalueres på 2024-data som holdes helt utenfor modellutviklingen. Modellene presterer relativt likt på testkriteriene, og bootstrapping brukes derfor for å undersøke om forskjellene mellom dem er reelle eller kan skyldes tilfeldig variasjon.
 ## Resultater: urørt 2024-testsett
 
-Modellene ble spesifisert og låst på 2022–2023, og evaluert én gang på 2024. Vi brukte
+Modellene ble spesifisert og låst på 2022–2023, og evaluert én gang på 2024. Det er brukt
 en parvis bootstrap over `insured_id` ($B=10\,000$; 95 % percentilintervall) for å
 kvantifisere usikkerheten i forskjeller i Tweedie-deviance og Gini. Alle parvise
 intervaller inkluderer null. Modellene kan derfor ikke skilles statistisk på
@@ -62,7 +62,6 @@ med å hente ut et stabilt frekvenssignal selv om forventningsmodellen er rimeli
 
 ## Rate table-utdrag
 
-Som i [rate-table-ekstraktet i referanserepoet](https://github.com/Dillon0218/motor-insurance-glm-pricing#rate-table-extract)
 vises relativiteter mot modellens referansenivå. `Kombinert` er frekvensrelativitet
 multiplisert med severityrelativitet. Dette er et utdrag av den låste
 frekvens–severity-modellen, ikke en ferdig kommersiell tariff.

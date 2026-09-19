@@ -162,15 +162,17 @@ def build_cc_scope_evidence(data, years):
 
 
 def build_claim_count_distribution(frame):
-    """Fordeling av skadeantall per poliseår (0/1/2/3+), med tilhørende eksponering."""
-    order = ["0", "1", "2", "3+"]
-    bucket = frame[CLAIMS_COL].clip(upper=3).map({0: "0", 1: "1", 2: "2", 3: "3+"})
-    counts = bucket.value_counts().reindex(order).fillna(0).astype(int)
+    """Fordeling per heltallig skadeantall, med tilhørende eksponering.
+
+    Alle heltall fra null til høyeste observerte skadeantall vises eksplisitt.
+    Det gjør uventet opphopning ved bestemte skadeantall synlig.
+    """
+    order = pd.RangeIndex(frame[CLAIMS_COL].max() + 1)
+    counts = frame[CLAIMS_COL].value_counts().reindex(order, fill_value=0).astype(int)
     exposure = (
-        frame.groupby(bucket, observed=True)[EXPOSURE_COL]
+        frame.groupby(CLAIMS_COL, observed=True)[EXPOSURE_COL]
         .sum()
-        .reindex(order)
-        .fillna(0)
+        .reindex(order, fill_value=0)
     )
     return pd.DataFrame(
         {
@@ -852,20 +854,21 @@ def _heatmap(matrix, cmap, vmin, vmax, title, cbar_label):
 
 
 def plot_claim_count_distribution(distribution):
-    """Stolpediagram: andel poliseår per skadeantall (0/1/2/3+)."""
-    fig, ax = plt.subplots(figsize=(5, 4), facecolor=SURFACE)
+    """Stolpediagram for alle skadeantall; log-skala synliggjør sjeldne grupper."""
+    fig, ax = plt.subplots(figsize=(7, 4), facecolor=SURFACE)
     ax.bar(
         distribution["skadeantall"],
-        distribution["andel_poliseår_prosent"],
+        distribution["poliseår"],
         color=ACCENT,
         width=0.6,
     )
-    for x, y in zip(
-        distribution["skadeantall"], distribution["andel_poliseår_prosent"]
-    ):
-        ax.text(x, y + 0.5, f"{y:.1f}%", ha="center", color=INK_SECONDARY, fontsize=9)
+    ax.set_yscale("log")
+    ax.set_xticks(distribution["skadeantall"])
     _style_axes(
-        ax, "Fordeling av skadeantall per poliseår", "Andel poliseår (%)", "Skadeantall"
+        ax,
+        "Fordeling av skadeantall per poliseår",
+        "Antall poliseår (log-skala)",
+        "Skadeantall",
     )
     fig.tight_layout()
     plt.close(fig)

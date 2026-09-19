@@ -2,6 +2,7 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import FuncFormatter
 
 from src_model_comparison.gini_bootstrap import NULL_MODEL, lorenz_curve
 
@@ -183,5 +184,111 @@ def plot_pairwise_forest(pairwise):
         figure.suptitle(
             "Parvis bootstrap: oransje = intervallet utelukker 0", fontsize=11
         )
+        figure.tight_layout()
+    return figure
+
+
+def plot_top_decile_decomposition(component_summary):
+    """Tre kompakte paneler: frekvens, rapportert severity og ren premie i toppdesilen."""
+    labels = {
+        "Frekvens": ("Skader per eksponeringsår", "{x:.2f}"),
+        "Rapportert severity": ("EUR per rapportert skade", "€{x:,.0f}"),
+        "Ren premie": ("EUR per eksponeringsår", "€{x:,.0f}"),
+    }
+    colors = ["#0072B2", "#222222"]
+    with plt.rc_context(RC):
+        figure, axes = plt.subplots(1, 3, figsize=(12, 3.8))
+        for axis, (component, row) in zip(axes, component_summary.iterrows()):
+            ylabel, formatter = labels[component]
+            values = row[["Predikert", "Observert"]].to_numpy(dtype=float)
+            bars = axis.bar(["Predikert", "Observert"], values, color=colors, width=0.62)
+            axis.set(title=component, ylabel=ylabel)
+            axis.yaxis.set_major_formatter(
+                FuncFormatter(lambda x, _, fmt=formatter: fmt.format(x=x))
+            )
+            axis.set_ylim(0, values.max() * 1.28)
+            for bar, value in zip(bars, values):
+                axis.annotate(
+                    formatter.format(x=value),
+                    (bar.get_x() + bar.get_width() / 2, value),
+                    xytext=(0, 5),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                    fontweight="bold",
+                )
+            axis.annotate(
+                f"A/E = {row['A/E']:.3f}",
+                (0.5, 0.92),
+                xycoords="axes fraction",
+                ha="center",
+                va="top",
+                fontsize=10,
+                fontweight="bold",
+                color="#D55E00" if abs(row["A/E"] - 1) > 0.03 else "#222222",
+            )
+        figure.suptitle(
+            "Høyeste prediksjonsdesil, toleddet GLM — frekvens forklarer premieunderskuddet",
+            fontsize=13,
+            fontweight="bold",
+            y=1.03,
+        )
+        figure.tight_layout()
+    return figure
+
+
+def plot_top_decile_profile(profile):
+    """Dumbbell-plot for modellenes tydeligste, observerbare høyrisikokjennetegn."""
+    ordered = profile.sort_values("Høyeste desil")
+    positions = np.arange(len(ordered))
+    with plt.rc_context(RC):
+        figure, axis = plt.subplots(figsize=(9, 3.8))
+        for y, (_, top_share, other_share) in zip(
+            positions, ordered.itertuples(index=False, name=None)
+        ):
+            axis.plot(
+                [other_share, top_share],
+                [y, y],
+                color="#B0B0B0",
+                linewidth=2,
+                zorder=1,
+            )
+        axis.scatter(
+            ordered["Øvrige 90 %"], positions, s=70, color="#7f7f7f", label="Øvrige 90 %", zorder=2
+        )
+        axis.scatter(
+            ordered["Høyeste desil"], positions, s=70, color="#0072B2", label="Høyeste desil", zorder=3
+        )
+        for y, (_, top_share, _) in zip(
+            positions, ordered.itertuples(index=False, name=None)
+        ):
+            axis.annotate(
+                f"{top_share:.1%}",
+                (top_share, y),
+                xytext=(7, -3),
+                textcoords="offset points",
+                fontsize=9,
+                fontweight="bold",
+                color="#0072B2",
+            )
+        axis.set(
+            xlabel="Andel av eksponering",
+            yticks=positions,
+            yticklabels=ordered["Kjennetegn"],
+            xlim=(0, 1.08),
+        )
+        axis.set_title("Hva kjennetegner modellens høyeste risikodesil?", pad=26)
+        axis.text(
+            0.5,
+            1.02,
+            "Blå = høyeste desil  ·  grå = øvrige 90 %",
+            transform=axis.transAxes,
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            color="#4d4d4d",
+        )
+        axis.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0%}"))
         figure.tight_layout()
     return figure

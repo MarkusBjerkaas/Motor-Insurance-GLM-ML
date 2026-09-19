@@ -1,12 +1,15 @@
 # ---
 # jupyter:
 #   jupytext:
-#     formats: ipynb,py_mirrors//py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
 #       jupytext_version: 1.19.5
+#   kernelspec:
+#     display_name: MotorForsikring (3.12.x)
+#     language: python
+#     name: python3
 # ---
 
 # %% [markdown]
@@ -33,6 +36,8 @@ from src_core_glm.model_data import build_development_frames
 from src_model_comparison.comparison_plots import (
     plot_model_comparison,
     plot_pairwise_forest,
+    plot_top_decile_decomposition,
+    plot_top_decile_profile,
 )
 from src_model_comparison.gini_bootstrap import (
     NULL_MODEL,
@@ -47,6 +52,8 @@ from src_model_comparison.recalibration import estimate_level_factor
 from src_model_comparison.test_evaluation import (
     build_approved_test_frame,
     build_calibration_table,
+    build_top_decile_component_summary,
+    build_top_decile_profile,
     evaluate_pricing_models,
 )
 
@@ -193,7 +200,48 @@ if RUN_2024_EVALUATION:
     plt.close(figure)
 
 # %% [markdown]
-# ## 4. Parvise sammenligninger
+# ## 4. Hvor oppstår premieunderskuddet?
+#
+# Den toleddede GLM-ens høyeste prediksjonsdesil dekomponeres i frekvens og
+# rapportert severity. Dette er en beskrivelse av det låste 2024-resultatet,
+# ikke et nytt modellvalg. Severity er kostnad per *rapportert* skade, og må
+# derfor leses med forbehold om den observerte opphopningen i skadeantall.
+
+# %%
+if RUN_2024_EVALUATION:
+    top_decile_components = build_top_decile_component_summary(
+        test_frame, frequency_model, severity_model
+    )
+    display(top_decile_components.round(3))
+
+# %%
+if RUN_2024_EVALUATION:
+    figure = plot_top_decile_decomposition(top_decile_components)
+    display(figure)
+    plt.close(figure)
+
+# %% [markdown]
+# ## 5. Hva kjennetegner høyeste risikodesil?
+#
+# Figuren sammenligner den toleddede modellens 10 % høyeste predikerte rene premier
+# med resten av porteføljen. Den beskriver hvilke observerbare ratingfaktorer som
+# samvarierer med høy predikert risiko; den viser ikke kausale effekter.
+
+# %%
+if RUN_2024_EVALUATION:
+    top_decile_profile = build_top_decile_profile(
+        test_frame, predictions["Toleddet GLM"]
+    )
+    display(top_decile_profile.round(3))
+
+# %%
+if RUN_2024_EVALUATION:
+    figure = plot_top_decile_profile(top_decile_profile)
+    display(figure)
+    plt.close(figure)
+
+# %% [markdown]
+# ## 6. Parvise sammenligninger
 #
 # Hver rad sammenligner modell A med modell B på samme bootstrap-utvalg.
 
@@ -217,7 +265,7 @@ if RUN_2024_EVALUATION:
     plt.close(figure)
 
 # %% [markdown]
-# ## 5. Begrensninger
+# ## 7. Begrensninger
 #
 # - **Ett testår.** Bootstrapen dekker utvalgsvariasjon mellom forsikringstakere innenfor 2024,
 #   men ikke variasjon fra år til år. Intervallene sier dermed ikke noe om hvordan
@@ -236,7 +284,7 @@ if RUN_2024_EVALUATION:
 #   modeller forklarer bare en liten andel av variasjonen.
 
 # %% [markdown]
-# ## 6. Tolkning
+# ## 8. Tolkning
 #
 # Modellene er evaluert én gang på 2024, og ingenting er justert etter resultatet.
 #
@@ -260,6 +308,10 @@ if RUN_2024_EVALUATION:
 # - **Alle modeller undervurderer den dyreste tiendedelen.** Observert/predikert er 1,12–1,21
 #   i øverste prediksjonsdesil. Kalibreringen i de øvrige desilene svinger mye mellom
 #   modellene, og forskjellene er små i forhold til støyen.
+# - **Høy risiko er først og fremst produktdrevet.** 96,7 % av eksponeringen i den toleddede
+#   GLM-ens høyeste desil er `COMP_N` (kasko uten egenandel), mot 4,4 % i resten av
+#   porteføljen. Høyeste desil er også oftere urban og fornyet forretning. Dette er en
+#   sammensetningsbeskrivelse av modellens risikosegment, ikke en kausal forklaring.
 #
 # **Konklusjon.** Det finnes ingen statistisk holdbar rangering mellom Tweedie-GLM, toleddet
 # GLM og CatBoost, verken på deviance eller Gini. CatBoost tilfører ingen målbar rangeringsevne
