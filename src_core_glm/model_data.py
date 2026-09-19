@@ -131,6 +131,16 @@ def to_model_frame(frame, columns):
     return model_frame
 
 
+def add_seat_category(model_frame):
+    """Legg til ``seat_category`` (<5, =5, >5) på modellrammen, slik at også skadefrie år kan predikeres."""
+    model_frame["seat_category"] = np.select(
+        [model_frame["seats"].lt(5), model_frame["seats"].eq(5)],
+        ["<5", "=5"],
+        default=">5",
+    )
+    return model_frame
+
+
 def assert_development_years(frame, allowed_years=TRAIN_YEARS):
     """Stopp umiddelbart hvis andre år enn utviklingsårene har nådd en analysefunksjon."""
     unexpected_years = set(frame["year"]) - set(allowed_years)

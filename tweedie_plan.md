@@ -13,8 +13,7 @@ $$
 $$
 
 uten å gjennomføre det endelige Tweedie-kandidatsøket. Infrastruktur, felles
-folder, asserts og power-estimering skal implementeres og verifiseres. Bred
-ankermodell og kandidatregister må låses av brukeren før reell modellkjøring.
+folder, asserts og $p$-utledning skal implementeres og verifiseres. Kandidatregisteret er låst (T-07); den endelige kjøringen gjøres av brukeren, og 2024 er urørt.
 
 ## 2. Harde avgrensninger
 
@@ -77,22 +76,27 @@ Fjern `POWER_GRID`, CV-sammenligning hvor hver kandidat scores med sin egen
 power, og automatisk valg av `selected_power` fra dette gridet. Deviance med
 forskjellige powerverdier er ikke direkte sammenlignbar.
 
-Implementer i stedet iterativ Pearson-estimering:
+Pearson-estimering direkte på Tweedie-modellen ble implementert og testet
+syntetisk, men ga ingen gyldig rot i $(1,2)$ på de reelle dataene (se T-05).
+Implementer i stedet:
 
-1. Start med $p=1{,}5$.
-2. Fit den senere låste ankermodellen.
-3. Estimer $p$ ved å løse Pearson-likningen med `brentq` (`solve_pearson_power` i `src_tweedie/tweedie_power.py`; se T-05 for hvorfor statsmodels' egen funksjon ikke brukes).
-4. Refit med estimert $p$.
-5. Gjenta til endringen er under en dokumentert toleranse eller maksimal
-   iterasjon er nådd.
-6. Krev $1<p<2$ og lås $p$ før variabelseleksjonen.
+1. Bygg severity-utvalget (B-15) med `build_severity_inputs`.
+2. Fit en Gamma-GLM på snittskade (vekt = antall skader, log-link) med den brede
+   ankermodellen: låste variabler, kjerne, `municipality_type` og alle tillegg.
+3. Les av dispersjonen $\hat\phi_s$ (Pearson-$\chi^2$/df) og sett
+   $p = (1+2\hat\phi_s)/(1+\hat\phi_s)$ (`severity_implied_power` i `src_tweedie/tweedie_power.py`).
+4. Krev $1<p<2$ og lås $p$ før variabelseleksjonen.
 
-Funksjonaliteten skal nå bare testes syntetisk. Den skal ikke kjøres på et
-ulåst reelt kandidatsett.
+**Limitation (skal stå i notebooken, bør vurderes utvidet):** metoden antar
+Gamma-fordelte skader med konstant CV og lik dispersjon for alle poliser, og
+estimatet er følsomt for storskadene (ca. 1,74 med alle skader, ca. 1,62 uten
+de 1 % største snittskadene). Mulige utvidelser er profilelikelihood over et
+$p$-gitter (krever eksakt Tweedie-tetthet) eller sensitivitetsanalyse av
+sluttmodellen ved andre $p$.
 
 ### 3.3 Senere variabelseleksjon
 
-Når kandidatregisteret er godkjent, skal Tweedie følge samme hovedstruktur
+Tweedie følger samme hovedstruktur
 som de andre GLM-ene: kjerne, alternative funksjonsformer, geografi og
 kjøretøyopplysninger, forhåndsdefinerte tillegg, eventuelle interaksjoner og
 eventuell ablasjon.
@@ -110,7 +114,7 @@ Før implementering skal agenten lese denne planen samt
 den autoritative Tweedie-planen; ikke opprett konkurrerende planfiler.
 
 Opprett et beslutningsregister for respons, vekt, ingen offset, ingen nested
-CV, Pearson-estimering, felles folder, ulåst kandidatregister og fortsatt
+CV, utledning av $p$, felles folder, kandidatregister og fortsatt
 sperre på 2024. Oppdater endringsloggen i alle berørte planer, også dersom en
 faserevisjon ikke endrer metoden. Nye vesentlige metodevalg må legges frem for
 brukeren før implementering.
@@ -236,37 +240,30 @@ src_tweedie/
 `tweedie_data.py` bygger full modellramme, oppretter `pure_premium`, bevarer
 indeksen og kaller asserts. Den skal ikke definere kandidatregisteret.
 
-`tweedie_power.py` implementerer iterativ Pearson-estimering med eksplisitte
-grenser, toleranse og maksimumsiterasjoner. Returner power, antall
-iterasjoner, konvergensstatus og en liten iterasjonshistorikk. Funksjonen skal
-ikke velge variabler eller tolke resultatet.
+`tweedie_power.py` inneholder `severity_implied_power`: Gamma-GLM på
+severity-utvalget og $p$ fra dispersjonen (T-05). Funksjonen returnerer
+dispersjon, power og antall skaderader, velger ikke variabler og tolker ikke
+resultatet.
 
 Modellspesifikasjon og fitting skal fortsatt være synlig i notebooken.
 
-## 10. Ren Tweedie-notebook
+## 10. Tweedie-notebook
 
-Behold samme enkle hovedstruktur som de andre GLM-notebookene:
+Samme hovedstruktur som de andre GLM-notebookene:
 
 1. Datagrunnlag
 2. Validering
-3. Modellspesifikasjon
-4. Sammenligning og valg
+3. Modellspesifikasjon (eksplisitte lister `LOCKED`, `CORE`, `GEOGRAPHY`, `ADDITIONAL`, `INTERACTIONS`)
+4. Sammenligning og valg: 4.1 låsing av $p$ (med limitation), 4.2–4.3
+   funksjonsform, 4.4 geografi, 4.5 tillegg, 4.6 interaksjoner, 4.7 ablasjon,
+   4.8 oppsummering
 
 Hver celle skal gjøre én tydelig oppgave og normalt være høyst 25 kodelinjer.
-Modellformelen skal stå i markdown før fitting. Flytt løkker, tester og
-tabellbygging til beskrivende støttefunksjoner.
+Modellformelen skal stå i markdown før fitting. Løkker, tester og tabellbygging
+ligger i støttefunksjoner (`src_core_glm/model_selection.py`, `src_tweedie/`).
 
-Fjern power-grid, automatisk finalist og dagens ulåste ablasjon. Behold en
-fleksibel `build_tweedie_specification` som senere kan ta råprediktorer,
-splineledd, interaksjoner og låst $p$.
-
-Notebooken skal avslutte kontrollert med meldingen:
-
-> Kandidatregister og bred ankermodell er ikke låst. Ingen
-> Tweedie-kandidater fittes eller velges i denne versjonen.
-
-Den skal kunne kjøres uten feil, men ikke kjøre reell Pearson-estimering eller
-kandidatseleksjon. Ikke opprett tomme resultatseksjoner.
+Notebooken avslutter med meldingen «Spesifikasjonen er ikke låst før den er
+godkjent. 2024 er ikke berørt.» Den endelige kjøringen gjøres av brukeren.
 
 ## 11. Frekvens og senere benchmark
 
@@ -294,7 +291,7 @@ Lag et midlertidig syntetisk script under `src_temp/` som tester:
 - severity-fit på delmengden og prediksjon på full valideringsfold;
 - bakoverkompatibel frekvens-/Tweedie-CV;
 - ugyldig eksponering, negativ incurred og manglende OOF-rad;
-- ugyldig $p$, Pearson-konvergens og maksimumsstopp;
+- ugyldig $p$ og gjenfinning av kjent $p$ fra severity-dispersjonen;
 - fravær av offset.
 
 Deretter:
@@ -329,14 +326,14 @@ Leveransen er ferdig når:
 
 - Tweedie-likningen er korrekt og modellen bruker rate og vekt uten offset;
 - ugyldig power-grid-CV er fjernet;
-- Pearson-estimering er implementert og syntetisk testet;
+- $p$ utledes fra severity-dispersjonen, syntetisk testet, og limitation står i notebooken;
 - alle tre modeller bruker samme fullpopulasjonsfolder;
 - severity scores riktig delmengde og predikerer hele valideringsfolden;
 - `prediction_oof` dekker hele modellpopulasjonen;
 - sentrale kontroller ligger i `src_asserts`;
 - notebooks er korte, synkroniserte og kjører uten tekniske feil;
-- ingen ulåst Tweedie-kandidat er antatt, fittet eller valgt;
-- ingen modellresultater er faglig tolket;
+- notebooken kjører kandidatseleksjon uten tekniske feil (endelig kjøring gjøres av brukeren);
+- ingen modellresultater er faglig tolket av assistenten;
 - berørte levende planer har oppdatert endringslogg;
 - 2024 fortsatt er fullstendig urørt.
 
@@ -352,10 +349,11 @@ brukerens bekreftelse.
 | T-02 | `var_weights = total_exposure`. | Høy eksponering er en mer presis observasjon av samme $\mu_i$. | Låst |
 | T-03 | Ingen offset. | Responsen er allerede en rate; offset og vekt ville telle eksponering to ganger. | Låst |
 | T-04 | Ingen nested CV. | $p$ estimeres én gang på ankermodellen og låses før seleksjon; deviance med ulik $p$ er ikke sammenlignbar. | Låst |
-| T-05 | $p$ estimeres iterativt (start 1,5, refit, toleranse $10^{-3}$, maks 20 iterasjoner) fra Pearson-likningen $\sum_i (w_i r_i^2/(\hat\phi\mu_i^p) - 1)\log\mu_i = 0$, løst med `brentq` på $[1{,}01;\,1{,}99]$. | `GLM.estimate_tweedie_power` (statsmodels 0.15.0) multipliserer «−1»-leddet med vekten, så likningen har forventning $1-w_i\neq0$ og er ikke skalainvariant: med rå eksponeringsvekter fant den ingen rot på syntetiske data med kjent $p=1{,}5$. Den eksplisitte likningen er skalainvariant. Avvik fra opprinnelig plantekst i §3.2; metoden (Pearson, iterativ, ingen CV) er uendret. | Låst |
+| T-05 | $p$ utledes fra severity-dispersjonen: $p=(1+2\hat\phi_s)/(1+\hat\phi_s)$, der $\hat\phi_s$ er Pearson-dispersjonen til en Gamma-GLM på snittskade (vekt = antall skader) med bred ankermodell. Låses før seleksjon. Ca. 1,74 med alle skader (B-15-utvalget). | Iterativ Pearson-estimering på Tweedie-modellen (eksplisitt likning, statsmodels' `estimate_tweedie_power` er ikke skalainvariant for eksponeringsvekter) ble implementert og testet syntetisk, men ga ingen rot i $(1,2)$ på reelle data: estimeringslikningen er negativ for alle $p$ og styres av storskadene. Profilelikelihood krever eksakt Tweedie-tetthet (ca. 40 linjer, numerisk sårbar). **Limitation:** antar Gamma-skader med konstant CV; estimatet er følsomt for storskader (ca. 1,62 uten de 1 % største); bør vurderes utvidet med profilelikelihood eller sensitivitetsanalyse. Avvik fra opprinnelig plantekst i §3.2. | Låst |
 | T-06 | Felles gruppefolder (`build_group_folds`, `GroupKFold(shuffle=True, random_state=100)` på `insured_id`) på hele modellpopulasjonen for frekvens, severity og Tweedie. | Gir sammenlignbare OOF-prediksjoner rad for rad. | Låst |
-| T-07 | Kandidatregister og bred ankermodell er ikke låst. | Krever brukerens beslutning om baseline-variabelvalg. Ingen Tweedie-kandidat er fittet eller valgt. | Åpen |
+| T-07 | Kandidatregister låst: `LOCKED` = `policy_type`, `year`; `CORE` = `circulation_area`, `log_vehicle_value` (lineær), `driver_age` (lineær); geografi = `municipality_type` i stedet for eller i tillegg til `circulation_area`; splines: alder df 2/3/4, bilverdi df 3; `ADDITIONAL` = `performance_hp_per_tonne`, `fuel_type`, `payment_frequency`, `business_type`, `vehicle_brand_pooled`, `seat_category` (<5, =5, >5); `INTERACTIONS` = alder × `performance_hp_per_tonne`, alder × `policy_type`, alder × `log_vehicle_value` (lineær alder). | Godkjent av bruker 2026-09-19. Bred ankermodell for $p$ = låste + kjerne + geografi + alle tillegg, lineært. | Låst |
 | T-08 | Sperre på 2024 gjelder fortsatt. | Krever eksplisitt godkjenning etter at alle modellspesifikasjoner er låst. | Låst |
+| T-09 | Forover-seleksjon tillater flere tillegg: `run_stepwise` legger til den beste kandidaten som består treleddsregelen og gjentar til ingen består; ablasjon kjører på alle termer unntatt `LOCKED`. Interaksjoner testes bare når begge hovedeffektene er med; en hovedeffekt kan ikke fjernes mens en interaksjon bruker den. Treleddsregelen er uendret. | Forrige variant tillot bare ett tillegg og var for streng. Algoritmen er liten (gjenbruker `select_candidate_stage`). Restrisiko: seleksjonsoptimisme fra mange sammenligninger på samme folder (dempes av 4/5-regelen); 2024 er den uavhengige kontrollen. Portering til frekvens og severity kun etter Tweedie fungerer og etter egen godkjenning; da skrives planene om og logges. | Låst |
 
 ## Endringslogg
 
@@ -364,3 +362,4 @@ brukerens bekreftelse.
 | 2026-09-19 | Plan før implementering | Låst rate-respons med eksponeringsvekt og uten offset, Pearson-estimering av $p$ uten nested CV, felles fullpopulasjonsfolder, korrigert severity-OOF-kontrakt og separat assert-arkitektur. Reelt Tweedie-kandidatsøk utsettes til bred ankermodell og kandidatregister er godkjent. |
 | 2026-09-19 | Implementering | Implementert `build_group_folds`, `prediction_data` i `cross_validate_glm` (bakoverkompatibel), `src_asserts/`, `src_tweedie/` og ren Tweedie-notebook som stopper før kandidatsøk. **Avvik:** Pearson-likningen løses eksplisitt (T-05) fordi `GLM.estimate_tweedie_power` ikke er skalainvariant for eksponeringsvekter; metoden er ellers uendret. Severity-foldene bygges nå på hele modellpopulasjonen (se `plans/Severity_plan.md`). Ingen Tweedie-modell er fittet. |
 | 2026-09-19 | CatBoost-diagnostikk klargjort | `cross_validate_residual_catboost` (`src_core_glm/residual_diagnostics.py`) er testet syntetisk for Tweedie ($1<p<2$, vekt $w\mu^{2-p}$) i `src_asserts/residual_diagnostics_asserts.py`, men ikke kjørt i Tweedie-notebooken. Diagnostikken er ikke en seleksjonsport. Når Tweedie-modellen er låst kalles den med `final_tweedie_specification = selection_specifications[selected_variable_model]`, `model_frame`, `cv_folds`, `blocked_feature_columns=("property_incurred", "pure_premium")` og `fit_kwargs` fra fasen. |
+| 2026-09-19 | Kandidatregister, forover-seleksjon og $p$ | Kandidatregisteret er låst (T-07) og forover-seleksjon med flere tillegg, interaksjoner og ablasjon er implementert i notebooken (T-09). **Avvik:** Pearson-estimering av $p$ ga ingen gyldig rot på reelle data og er erstattet av severity-implisert $p$ (T-05), med limitation dokumentert i notebooken; Pearson-koden er fjernet. §3.2, §9, §10 og §14 skrevet om. Frekvens og severity er uendret; portering av algoritmen er planlagt senere og krever egen godkjenning. |

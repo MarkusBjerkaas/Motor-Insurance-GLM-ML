@@ -78,10 +78,19 @@ def assert_tweedie_fit(result, design, spec):
     )
 
 
-def assert_power_estimate(estimate):
-    """Pearson-estimatet er endelig, i (1, 2) og konvergert før power låses."""
-    assert_valid_power(estimate["power"])
+def assert_model_definition(definition, locked):
+    """Låste termer er med, ingen duplikater, og hver interaksjon har begge hovedeffektene."""
+    terms = definition["terms"]
+    require(len(terms) == len(set(terms)), f"Duplikate termer: {terms}.")
+    missing = [column for column in locked if column not in terms]
+    require(not missing, f"Låste variabler mangler i modellen: {missing}.")
+    for term in terms:
+        if isinstance(term, tuple):
+            require(
+                all(part in terms for part in term),
+                f"Interaksjonen {term} mangler en hovedeffekt.",
+            )
     require(
-        estimate["converged"],
-        f"Pearson-estimeringen konvergerte ikke innen {estimate['n_iter']} iterasjoner.",
+        all(column in terms for column in definition["splines"]),
+        "En spline gjelder en variabel som ikke er i modellen.",
     )

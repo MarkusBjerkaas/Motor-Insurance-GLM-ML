@@ -91,3 +91,116 @@ def run_backward_ablation(
             return current_name, removed, tables
         removed.append(next_name.rsplit("_uten_", 1)[1])
         current_name = next_name
+
+
+# --- Trinnvis seleksjon på modelldefinisjoner --------------------------------
+# En modelldefinisjon er {"terms": [...], "splines": {kolonne: df}}. En term er
+# en kolonne (str) eller en interaksjon mellom to kolonner (tuple). Låste
+# variabler, kjerne og tillegg er bare lister med termer i notebooken.
+
+
+def term_label(term):
+    """Kort navn på en term, brukt i modellnavn og tabeller."""
+    return term if isinstance(term, str) else "*".join(term)
+
+
+def can_add(definition, term):
+    """En term legges bare til én gang, og en interaksjon krever begge hovedeffektene."""
+    if term in definition["terms"]:
+        return False
+    return isinstance(term, str) or all(part in definition["terms"] for part in term)
+
+
+def can_remove(definition, term, protected):
+    """Låste termer og hovedeffekter som en gjenværende interaksjon bruker kan ikke fjernes."""
+    used_by_interaction = any(
+        isinstance(other, tuple) and term in other for other in definition["terms"]
+    )
+    return term not in protected and not used_by_interaction
+
+
+def remove_term(definition, term):
+    """Definisjonen uten ``term`` (og uten termens spline)."""
+    terms = [other for other in definition["terms"] if other != term]
+    splines = {col: df for col, df in definition["splines"].items() if col != term}
+    return {"terms": terms, "splines": splines}
+
+
+def propose_additions(candidate_terms):
+    """Forslagsfunksjon for forover-seleksjon: legg til én kandidatterm om gangen."""
+
+    def propose(definition):
+        return {
+            f"+{term_label(term)}": {
+                **definition,
+                "terms": [*definition["terms"], term],
+            }
+            for term in candidate_terms
+            if can_add(definition, term)
+        }
+
+    return propose
+
+
+def propose_removals(protected):
+    """Forslagsfunksjon for bakover-ablasjon: fjern én term om gangen (unntatt låste)."""
+
+    def propose(definition):
+        return {
+            f"-{term_label(term)}": remove_term(definition, term)
+            for term in definition["terms"]
+            if can_remove(definition, term, protected)
+        }
+
+    return propose
+
+
+def run_round(current, proposals, definitions, evaluate_model, select_stage):
+    """Evaluer alle forslag mot ``current`` og velg beste som oppfyller treleddsregelen.
+
+    ``proposals`` er {endring: modelldefinisjon}. Returnerer valgt modellnavn
+    (``current`` hvis ingen består) og beslutningstabellen.
+    """
+    names = {}
+    for change, definition in proposals.items():
+        names[f"{current}{change}"] = change
+        definitions[f"{current}{change}"] = definition
+        evaluate_model(f"{current}{change}")
+    selected, table = select_stage(current, list(names))
+    table["endring"] = table.index.map(names)
+    return selected, table
+
+
+def run_stepwise(start_name, propose, definitions, evaluate_model, select_stage):
+    """Gjenta ``run_round`` fra den nye modellen til ingen forslag består regelen.
+
+    Forover-seleksjon (``propose_additions``) og bakover-ablasjon
+    (``propose_removals``) bruker samme løkke og samme regel.
+    Returnerer sluttmodellens navn og én tabell med kolonnen ``runde``.
+    """
+    current, tables = start_name, []
+    while proposals := propose(definitions[current]):
+        selected, table = run_round(
+            current, proposals, definitions, evaluate_model, select_stage
+        )
+        tables.append(table.assign(runde=len(tables) + 1))
+        if selected == current:
+            break
+        current = selected
+    return current, pd.concat(tables) if tables else pd.DataFrame()
+
+
+def summarize_selection_path(path, cv_results, response, sample_weight, power):
+    """Én rad per valgt modell i stigen: pooled OOF-deviance etter hvert steg."""
+    return pd.DataFrame(
+        [
+            {
+                "steg": step,
+                "modell": name,
+                "oof_deviance": mean_tweedie_deviance(
+                    response, cv_results[name]["oof"], sample_weight=sample_weight, power=power
+                ),
+            }
+            for step, name in path
+        ]
+    )
