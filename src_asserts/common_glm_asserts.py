@@ -82,13 +82,6 @@ def assert_positive_finite(values, name="prediksjoner"):
     )
 
 
-def assert_comparable_oof(oofs, expected_index):
-    """Senere benchmark: alle OOF-serier har lik indeks, full dekning og positive verdier."""
-    for name, oof in oofs.items():
-        assert_full_oof_coverage(oof, expected_index, name)
-        assert_positive_finite(oof, name)
-
-
 def assert_model_definition(definition, locked):
     """Låste termer er med, ingen duplikater, og hver interaksjon har begge hovedeffektene."""
     terms = definition["terms"]

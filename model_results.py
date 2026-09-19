@@ -10,18 +10,22 @@
 # ---
 
 # %% [markdown]
-# # Endelig sammenligning på 2024-teståret
+# # Endelig modellsammenligning: out-of-sample 2024
 #
-# Denne notebooken er presentasjonen av de låste prismodellene. Den viser én
-# sammenligningstabell og én figur, begge basert på det urørte teståret.
+# Tre prismodeller for ren egen-skadepremie (forventet skadekostnad per eksponeringsår)
+# sammenlignes på ett ubrukt år: **Tweedie-GLM**, **toleddet GLM** (frekvens × severity)
+# og **CatBoost**. Modellene er spesifisert og refittet på 2022–2023 i egne notebooks
+# (`tweedie`, `glm_pricing_models`, `glm_pricing_severity`, `ml_pricing`) og lagret i
+# `models/`. Ingen modell trenes eller justeres her.
 #
-# **Testlåsen er aktiv.** Ingen 2024-data leses, klargjøres eller evalueres før
-# `RUN_2024_EVALUATION` og godkjenningskoden bevisst aktiveres etter eksplisitt
-# godkjenning.
+# 2024 er ikke brukt til modellvalg, seleksjon eller tuning. Testlåsen er aktiv:
+# ingen 2024-data leses før `RUN_2024_EVALUATION` og godkjenningskoden bevisst settes.
 
 # %%
 from IPython.display import display
 
+from src_core_glm.model_data import build_development_frames
+from src_model_comparison.locked_models import load_locked_model
 from src_model_comparison.test_evaluation import (
     build_approved_test_frame,
     build_calibration_table,
@@ -29,48 +33,82 @@ from src_model_comparison.test_evaluation import (
     plot_test_comparison,
 )
 
-TWEEDIE_POWER = 1.744
+TWEEDIE_POWER = 1.744  # samme avrundede p som i CatBoost og protokollen under
 RUN_2024_EVALUATION = False
 APPROVAL_CODE = None
-retained_brands = None
-prediction_functions = {}
 
 # %% [markdown]
-# ## 1. Låste modeller
+# ## 1. Modellene
 #
-# Fylles ut først når alle spesifikasjoner er låst. Hver funksjon skal motta
-# den klargjorte test-rammen og returnere forventet ren premie per
-# eksponeringsår. Den todelte modellen returnerer frekvens $\times$ severity.
+# Alle tre estimerer $\mu_i=E[S_i/e_i]$, forventet skadekostnad per eksponeringsår for
+# poliseår $i$ med totalkostnad $S_i$ og eksponering $e_i$. Prediktorene er de samme 12
+# kandidatvariablene i alle modellene; hver modell velger selv hvilke som brukes.
 #
-# Modellobjekter finnes foreløpig bare i de enkelte modelleringsnotebookene.
-# Derfor må de fittes på hele utviklingssettet og deres treningslærte
-# imputasjon/transformasjoner tas med hit før testlåsen åpnes.
+# **Tweedie-GLM.** Ren premie modelleres direkte, med log-link og vekt $e_i$:
+#
+# $$
+# \frac{S_i}{e_i}\sim\operatorname{Tweedie}\!\left(\mu_i,\tfrac{\phi}{e_i},p\right),
+# \qquad
+# \log\mu_i=\beta_0+\gamma^{\mathrm{type}}_i+\gamma^{\mathrm{year}}_i+\gamma^{\mathrm{area}}_i
+# +\gamma^{\mathrm{pay}}_i+\gamma^{\mathrm{fuel}}_i+\gamma^{\mathrm{seat}}_i+\gamma^{\mathrm{bus}}_i
+# +\beta_v\log V_i+f_3(\mathrm{age}_i).
+# $$
+#
+# **Toleddet GLM.** Frekvens og severity modelleres hver for seg, og premien er produktet:
+#
+# $$
+# \widehat R_i=\widehat\lambda_i\,\widehat s_i,
+# \qquad
+# \log\lambda_i=\beta_0+\gamma^{\mathrm{type}}_i+\gamma^{\mathrm{year}}_i+\gamma^{\mathrm{area}}_i
+# +\gamma^{\mathrm{pay}}_i+\gamma^{\mathrm{bus}}_i+\beta_v\log V_i+f_4(\mathrm{age}_i),
+# $$
+#
+# $$
+# \log s_i=\alpha_0+\delta^{\mathrm{type}}_i+\delta^{\mathrm{year}}_i+\delta^{\mathrm{area}}_i
+# +\delta^{\mathrm{bus}}_i+\alpha_v\log V_i+\alpha_a\,\mathrm{age}_i.
+# $$
+#
+# Frekvensen er Poisson (vekt $e_i$), severity er Gamma på poliseår med skade (vekt
+# antall skader). $f_k$ er en naturlig kubisk spline med $k$ frihetsgrader.
+#
+# **CatBoost.** Gradientboostede symmetriske trær med log-link og Tweedie-tap:
+#
+# $$
+# \widehat\mu(x)=\exp\Big\{\sum_{m=1}^{300}\eta\,t_m(x)\Big\},\qquad \eta=0.03,\ \text{dybde }4.
+# $$
+#
+# Tweedie-GLM og CatBoost bruker $p=1.744$. Den fullstendige spesifikasjonen (leddene,
+# referansenivåene og antall parametere) står i hver modellnotebook.
 
 # %%
-# prediction_functions = {
-#     "Tweedie-GLM": lambda frame: tweedie_predictor(frame),
-#     "Toleddet GLM": lambda frame: frequency_predictor(frame) * severity_predictor(frame),
-#     "CatBoost": lambda frame: catboost_predictor(frame),
-# }
-# retained_brands = ...  # Kun poolingen lært fra utviklingsårene 2022–2023.
+# Lås opp de lagrede modellene. Brand-poolingen læres kun fra 2022–2023.
+retained_brands = build_development_frames()["retained_brands"]
+frequency_model = load_locked_model("frequency")
+severity_model = load_locked_model("severity")
+tweedie_model = load_locked_model("tweedie")
+catboost_model = load_locked_model("catboost")
+
+prediction_functions = {
+    "Tweedie-GLM": tweedie_model,
+    "Toleddet GLM": lambda frame: frequency_model(frame) * severity_model(frame),
+    "CatBoost": catboost_model,
+}
 
 # %% [markdown]
 # ## 2. Testprotokoll
 #
-# For poliseår $i$ sammenlignes observert og predikert ren premie,
-# $R_i=S_i/e_i$ og $\widehat R_i$. Primærmålet er eksponeringsvektet
-# Tweedie-deviance med den låste verdien $p=1.744$; lavere er bedre. Vektet MAE
-# og porteføljebalanse supplerer med henholdsvis gjennomsnittlig feil og nivå.
+# Med observert $R_i=S_i/e_i$ og predikert $\widehat R_i$ måles hver modell med
+# eksponeringsvektet Tweedie-deviance ($p=1.744$), vektet MAE og porteføljebalanse
+# $\sum_i e_i\widehat R_i\big/\sum_i S_i-1$. **Primærmål er deviance; lavere er bedre.**
+# Kalibreringsplottet (ti like store prediksjonsgrupper) brukes som kontroll: en modell
+# med lavest deviance regnes bare som best hvis den ikke viser vesentlig systematisk skjevhet.
 #
-# Teståret brukes én gang, etter at modellene og denne protokollen er låst.
+# `year` er en låst kategorisk term og 2024 finnes ikke i treningsdata, så alle modeller skåres
+# med 2023-nivået. Numeriske prediktorer klippes til treningsområdet ved skåring.
 
 # %%
 if RUN_2024_EVALUATION:
-    if retained_brands is None or not prediction_functions:
-        raise ValueError("Koble inn alle låste modeller før testlåsen åpnes.")
-    test_frame = build_approved_test_frame(
-        retained_brands, approval_code=APPROVAL_CODE
-    )
+    test_frame = build_approved_test_frame(retained_brands, approval_code=APPROVAL_CODE)
     results, predictions = evaluate_pricing_models(
         test_frame, prediction_functions, power=TWEEDIE_POWER
     )
@@ -78,19 +116,34 @@ if RUN_2024_EVALUATION:
 
 # %% [markdown]
 # ## 3. Resultater
-#
-# Tabellen rangerer modellene etter primærmålet. Figuren er en kontroll av om
-# riktig porteføljenivå også holdes på tvers av risikogruppene.
 
 # %%
 if RUN_2024_EVALUATION:
     display(results.round(3))
+
+# %%
+if RUN_2024_EVALUATION:
     figure = plot_test_comparison(results, calibration)
 
 # %% [markdown]
-# ## 4. Tolkning
+# ## 4. Begrensninger
 #
-# Den beste modellen har lavest Tweedie-deviance, men velges bare dersom
-# kalibreringsplottet ikke viser en vesentlig systematisk skjevhet. Teståret
-# er ett historisk år, så resultatet dokumenterer generalisering til denne
-# perioden, ikke en universell eller kausal effekt.
+# - **Ett testår.** Rangeringen dokumenterer generalisering til 2024, ikke en universell
+#   eller kausal effekt. Forskjeller i deviance mellom modellene er ikke gitt usikkerhet;
+#   dersom modellene ligger tett, bør forskjellene ikke tolkes som sikre.
+# - **Årsdrift.** Alle modeller skåres med 2023-nivået. En prisendring eller endret
+#   skadenivå fra 2023 til 2024 blir derfor liggende i porteføljebalansen og er ikke en
+#   modellfeil.
+# - **Optimistiske utviklingsscorer.** Variabelutvalg, spesifikasjon og hyperparametere er
+#   valgt på samme fem CV-folder, og $p$ er estimert på hele utviklingssettet.
+# - **CatBoost er skjev i nivå.** Modellen undervurderer porteføljen allerede på
+#   utviklingsdata (−5,4 % balanse på 2023-radene i en tørrkjøring uten 2024). Den lave
+#   læringsraten og $L_2$-regulariseringen gir ikke full nivåkalibrering; balansen på
+#   teståret bør leses med det i minne.
+# - **Lav forklart varians.** Skadekostnad per poliseår har få og skjeve skader; alle
+#   modeller forklarer bare en liten andel av variasjonen (D² ≈ 0,02 for CatBoost).
+#
+# ## 5. Tolkning
+#
+# Fylles ut etter at 2024-evalueringen er kjørt og resultatene er vurdert mot
+# kalibreringsplottet.

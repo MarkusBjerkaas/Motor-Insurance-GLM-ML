@@ -16,10 +16,10 @@
 # %% [markdown]
 # # Tweedie-modell for ren egen-skadepremie
 #
-# Tweedie-GLM er utfordreren til den todelte modellen
+# Formålet er å modellere forventet skadekostnad per eksponeringsår (pure premium)
+# direkte med en Tweedie-GLM. Modellen utfordrer den todelte modellen
 # $\widehat{\text{pure premium}} = \widehat{\text{frekvens}} \times \widehat{\text{severity}}$.
-# Notebooken bruker bare utviklingsårene 2022–2023; 2024 leses aldri.
-# Beslutningene ligger i `tweedie_plan.md` (register T-01–T-12).
+# Notebooken bruker bare utviklingsårene 2022–2023; 2024 er ikke brukt.
 
 # %%
 from functools import partial
@@ -63,6 +63,8 @@ from src_frequency.frequency_diagnostics import (
     plot_oof_residuals_against_fitted,
     plot_oof_residuals_by_continuous_predictor,
 )
+from src_model_comparison.locked_models import lock_glm
+from src_model_comparison.variable_coverage import build_variable_coverage
 from src_severity.severity_data import build_severity_inputs
 from src_tweedie.tweedie_data import build_tweedie_frame, summarize_tweedie_frame
 from src_tweedie.tweedie_diagnostics import tweedie_deviance_residuals
@@ -78,14 +80,14 @@ N_JOBS = 8  # parallelle prosesser for kandidat-CV (resultatene er de samme som 
 #
 # La $S_i$ være `property_incurred`, $e_i$ være `total_exposure` og
 # $R_i = S_i/e_i$ observert pure premium per eksponeringsår. Alle poliseår er
-# gyldige observasjoner, også skadefrie ($R_i = 0$), og flere skader på samme
-# poliseår er tillatt fordi $S_i$ er aggregert årlig skadekostnad.
+# gyldige observasjoner, også skadefrie ($R_i = 0$); $S_i$ er aggregert årlig
+# skadekostnad, så flere skader per poliseår er tillatt.
 
 # %%
 frames = build_development_frames()
 development = frames["development"]
 
-# Kolonnene som er tilgjengelige for modellene. Selve modellvalget står i §3.
+# Kolonnene som er tilgjengelige for modellene.
 AVAILABLE_COLUMNS = [
     "policy_type",
     "year",
@@ -107,9 +109,8 @@ display(summarize_tweedie_frame(model_frame).round(3))
 # %% [markdown]
 # ## 2. Validering
 #
-# Fem gruppefolder på `insured_id` bygges på hele modellpopulasjonen. Samme
-# indeks, gruppekolonne og seed gir identiske folder som i frekvens- og
-# severity-notebookene, slik at OOF-prediksjonene kan sammenlignes rad for rad.
+# Fem gruppefolder på `insured_id` (samme seed og folder som i frekvens- og
+# severity-notebookene, så OOF-prediksjonene kan sammenlignes rad for rad).
 
 # %%
 cv_folds = build_group_folds(
@@ -144,9 +145,8 @@ assert_valid_folds(cv_folds, model_frame)  # sanity-sjekk, kan fjernes
 # $R_i$ er allerede en rate, og et år med høy eksponering er en mer presis
 # observasjon av samme $\mu_i$.
 #
-# Power $p$ utledes én gang fra severity-dispersjonen til en bred ankermodell (§4.1)
-# og låses *før* seleksjonen (deviance med ulike $p$ er ikke sammenlignbar, så $p$
-# velges ikke ved CV).
+# Power $p$ utledes fra severity-dispersjonen (§4.1) og låses før seleksjonen;
+# deviance med ulike $p$ er ikke sammenlignbar, så $p$ velges ikke ved CV.
 
 # %%
 # Hvilke variabler som er hva. Seleksjonen under leser bare disse listene.
@@ -198,8 +198,8 @@ assert_tweedie_spec(
 #
 # $$\bar d > \frac{s_d}{\sqrt{5}}, \qquad \bar d = \tfrac15\sum_k d_k.$$
 #
-# Kravet hindrer at små, støydrevne gevinster slipper inn; det er en grov
-# støyfilter, ikke en formell test (fem folder gir et usikkert $s_d$).
+# Kravet er et grovt støyfilter mot små gevinster, ikke en formell test (fem folder
+# gir et usikkert $s_d$).
 #
 # | Trinn | Type | Kandidater |
 # |---|---|---|
@@ -210,27 +210,18 @@ assert_tweedie_spec(
 # | 4.7 Ablasjon | bakover-løkke | alle termer unntatt `LOCKED` |
 #
 # Ablasjonen kan ikke fjerne en hovedeffekt så lenge en interaksjon bruker den.
-# Utviklingsscoren er litt optimistisk fordi mange kandidater sammenlignes på de
-# samme foldene; 2024 er den uavhengige kontrollen og er ikke berørt.
 #
 # ### 4.1 Låsing av $p$ fra severity-dispersjonen
 #
-# En Tweedie med $1<p<2$ er en sammensatt Poisson–Gamma-variabel. Er skadestørrelsen
-# Gamma med dispersjon $\phi_s$ (= CV$^2$), er
+# Er skadestørrelsen Gamma med dispersjon $\phi_s$ (= CV$^2$), er den sammensatte
+# Poisson–Gamma-variabelen Tweedie med
 #
 # $$p = \frac{1 + 2\phi_s}{1 + \phi_s}.$$
 #
 # $\phi_s$ hentes fra en Gamma-GLM på snittskade (vekt = antall skader, samme
 # severity-utvalg som i severity-notebooken) med en bred ankermodell: låste
-# variabler, kjerne, `municipality_type` og alle tillegg, lineært.
-#
-# > **Limitation (bør vurderes utvidet).** $p$ er svakt identifisert i disse dataene,
-# > og metoden hviler på to antakelser: Gamma-fordelte skader med konstant CV, og at
-# > dispersjonen er lik for alle poliser. Estimatet er følsomt for storskadene: uten
-# > de 1 % største snittskadene faller det fra ca. 1,74 til ca. 1,62. Pearson-estimering
-# > direkte på Tweedie-modellen ble forsøkt (T-05), men ga ingen gyldig rot i $(1,2)$.
-# > Mulige utvidelser: profilelikelihood over et $p$-gitter (krever eksakt
-# > Tweedie-tetthet), eller en sensitivitetsanalyse av sluttmodellen ved andre $p$.
+# variabler, kjerne, `municipality_type` og alle tillegg, lineært. Metoden
+# forutsetter Gamma-fordelte skader med konstant CV og lik dispersjon for alle poliser.
 
 # %%
 severity_frame = build_severity_inputs(development)["severity_frame"]
@@ -240,7 +231,7 @@ TWEEDIE_POWER = power_estimate["power"]
 assert_valid_power(TWEEDIE_POWER)  # sanity-sjekk, kan fjernes
 print(
     f"Severity-dispersjon φ_s = {power_estimate['dispersion']:.3f} "
-    f"({power_estimate['n_severity_rows']} skadepoliseår)  →  låst p = {TWEEDIE_POWER:.3f}"
+    f"({power_estimate['n_severity_rows']} skadepoliseår)  →  låst p = {TWEEDIE_POWER:.5f}"
 )
 
 # %%
@@ -275,7 +266,7 @@ evaluate_models(["K0"])
 # ### 4.2 Funksjonsform: alder
 #
 # Lineær alder (K0) utfordres av naturlig kubisk spline med 2, 3 og 4
-# frihetsgrader. Bare én aldersform kan velges.
+# frihetsgrader; bare én form kan velges.
 
 # %%
 core = definitions["K0"]
@@ -306,8 +297,7 @@ print(f"Valgt etter bilverdi: {value_model}")
 # ### 4.4 Geografi
 #
 # `circulation_area` (U/R) er med i kjernen. `municipality_type` (I/C/IS) testes
-# enten *i stedet for* `circulation_area` eller *i tillegg til* den. Bare ett
-# alternativ kan velges.
+# enten *i stedet for* `circulation_area` eller *i tillegg til* den.
 
 # %%
 current = definitions[value_model]
@@ -322,8 +312,7 @@ print(f"Valgt etter geografi: {geography_model}")
 # ### 4.5 Tillegg
 #
 # Forover-seleksjon: beste tillegg som består regelen legges til, og de
-# gjenstående testes på nytt mot den nye modellen. Løkken stopper når ingen
-# tillegg består. Flere tillegg kan altså komme inn.
+# gjenstående testes på nytt mot den nye modellen, til ingen består.
 
 # %%
 additions_model, additions_table = run_stepwise(
@@ -340,7 +329,7 @@ print(f"Valgt etter tillegg: {additions_model}")
 # ### 4.6 Interaksjoner
 #
 # Samme forover-løkke. En interaksjon testes bare når begge hovedeffektene er i
-# modellen, ellers hadde testen lagt til to ting samtidig.
+# modellen.
 
 # %%
 interaction_model, interaction_table = run_stepwise(
@@ -351,11 +340,12 @@ interaction_model, interaction_table = run_stepwise(
     select_stage,
 )
 display(interaction_table.round(4))
-final_definition = definitions[interaction_model]
+interaction_definition = definitions[interaction_model]
 not_tested = [
     term
     for term in INTERACTIONS
-    if term not in final_definition["terms"] and not can_add(final_definition, term)
+    if term not in interaction_definition["terms"]
+    and not can_add(interaction_definition, term)
 ]
 print(f"Valgt etter interaksjoner: {interaction_model}")
 print(f"Ikke testet (mangler hovedeffekt): {not_tested or 'ingen'}")
@@ -363,9 +353,8 @@ print(f"Ikke testet (mangler hovedeffekt): {not_tested or 'ingen'}")
 # %% [markdown]
 # ### 4.7 Ablasjon
 #
-# Bakover-løkke: én term fjernes om gangen fra modellen som nå er valgt (alt
-# unntatt `LOCKED`), og fjerningen beholdes bare når den oppfyller den samme
-# firleddsregelen. Gjentas til ingen fjerning består.
+# Bakover-løkke: én term (alt unntatt `LOCKED`) fjernes om gangen, og fjerningen
+# beholdes bare når den oppfyller den samme firleddsregelen.
 
 # %%
 final_model, ablation_table = run_stepwise(
@@ -381,13 +370,11 @@ print(f"Valgt etter ablasjon: {final_model}")
 # %% [markdown]
 # ### 4.8 Forover-seleksjon: hva tilfører verdi?
 #
-# Én rad per valgt steg i funksjonsform (§4.2–4.4), tillegg (§4.5) og
-# interaksjoner (§4.6); ablasjonen (§4.7) står i sin egen tabell. `oof_deviance` er
-# pooled OOF for modellen etter steget (utviklingsscore, ikke en uavhengig
-# evaluering). `snitt_gevinst` er snittet av fold-gevinstene mot foreldremodellen,
-# `se_gevinst` er standardfeilen, og `gevinst_i_se` er forholdet mellom dem. Rundt
-# 1 er marginalt: når flere kandidater sammenlignes, ligger den beste ofte på ca.
-# 1–1,5 SE selv uten noe ekte signal. Tydelig verdi krever vesentlig mer.
+# Én rad per valgt steg. `oof_deviance` er pooled OOF etter steget,
+# `snitt_gevinst` og `se_gevinst` er snitt og standardfeil av fold-gevinstene mot
+# foreldremodellen, og `gevinst_i_se` er forholdet mellom dem. Rundt 1 er marginalt:
+# når mange kandidater sammenlignes, ligger den beste ofte på 1–1,5 SE uten noe
+# ekte signal.
 
 # %%
 display(
@@ -395,21 +382,19 @@ display(
         [age_table, value_table, geography_table, additions_table, interaction_table]
     ).round(4)
 )
-assert_model_definition(definitions[final_model], LOCKED)  # sanity-sjekk, kan fjernes
-print("Valgt Tweedie-modell:", definitions[final_model])
-print("Spesifikasjonen er ikke låst før den er godkjent. 2024 er ikke berørt.")
+final_definition = definitions[final_model]
+assert_model_definition(final_definition, LOCKED)  # sanity-sjekk, kan fjernes
+print("Valgt Tweedie-modell:", final_definition)
 
 # %% [markdown]
 # ### 4.9 Konkurrerende modeller
 #
-# Blant alle modeller som er evaluert i seleksjonen vises de tre med lavest pooled
-# OOF-deviance. `endring` viser hva som skiller dem fra den valgte modellen,
-# `parametere` er antall koeffisienter (inkludert konstantledd) og
-# `delta_mot_valgt` er OOF-deviance minus den valgtes (negativ = lavere). Er en
-# enklere modell praktisk talt like god (liten delta målt mot SE i §4.8), er den å
-# foretrekke. En mer kompleks modell med lavere deviance er bare interessant hvis
-# forskjellen er tydelig over støyen. Tabellen er beslutningsgrunnlag og endrer ikke
-# seleksjonsregelen.
+# De tre evaluerte modellene med lavest pooled OOF-deviance. `endring` viser hva
+# som skiller dem fra den valgte modellen, `parametere` er antall koeffisienter
+# (inkludert konstantledd) og `delta_mot_valgt` er OOF-deviance minus den valgtes
+# (negativ = lavere). Er en enklere modell praktisk talt like god, er den å
+# foretrekke; en mer kompleks modell teller bare hvis forskjellen er tydelig over
+# støyen (jf. SE i §4.8).
 
 # %%
 top_models = build_top_models_table(
@@ -424,11 +409,38 @@ with pd.option_context("display.max_colwidth", None):
     display(top_models.reset_index(drop=True).round(4))
 
 # %% [markdown]
-# ### 4.10 Valgt modell: koeffisienter
+# ### 4.10 Endelig modell
 #
-# Den valgte modellen estimeres på alle utviklingsdata (2022–2023) med
-# cluster-robuste standardfeil på `insured_id`, som i frekvens- og severity-notebookene.
-# Koeffisientene er log-relativiteter i dette datasettet, ikke kausale effekter.
+# Tweedie-GLM med log-link, eksponeringen $e_i$ som vekt (uten offset) og låst
+# $p \approx 1{,}744$:
+#
+# $$
+# R_i = \frac{S_i}{e_i} \sim \operatorname{Tweedie}\!\left(\mu_i, \frac{\phi}{e_i}, p\right),
+# \qquad p \approx 1{,}744,
+# $$
+#
+# $$
+# \begin{aligned}
+# \log \mu_i ={}& \beta_0
+# + \gamma^{\text{type}}_{\text{policy_type}_i}
+# + \gamma^{\text{year}}_{\text{year}_i}
+# + \gamma^{\text{area}}_{\text{circulation_area}_i}
+# + \gamma^{\text{pay}}_{\text{payment_frequency}_i} \\
+# &+ \gamma^{\text{fuel}}_{\text{fuel_type}_i}
+# + \gamma^{\text{seat}}_{\text{seat_category}_i}
+# + \gamma^{\text{bus}}_{\text{business_type}_i}
+# + \beta_v\,\text{log_vehicle_value}_i
+# + f(\text{driver_age}_i).
+# \end{aligned}
+# $$
+#
+# Her er $\gamma$ effekten av et nivå på en kategorisk variabel, og $\gamma = 0$ for
+# referansenivået: `policy_type` = COMP_E, `year` = 2023, `circulation_area` = U,
+# `payment_frequency` = A, `fuel_type` = D, `seat_category` = `=5`,
+# `business_type` = NB. $f$ er en naturlig kubisk spline med 3 frihetsgrader.
+# Modellen har 15 parametere: konstantledd (1) + kategoriske nivåer (10) +
+# `log_vehicle_value` (1) + spline (3). Den estimeres på alle utviklingsdata
+# (2022–2023) med cluster-robuste standardfeil på `insured_id`.
 
 # %%
 final_specification = specifications[final_model]
@@ -438,13 +450,34 @@ final_design = prepare_design_frame(
 final_fit = fit_glm(
     final_specification, final_design, cluster_groups=final_design["insured_id"]
 )
+# Kontroll: notebooken og LaTeX-teksten over beskriver samme modell.
+assert final_definition["terms"] == [
+    "policy_type",
+    "year",
+    "circulation_area",
+    "log_vehicle_value",
+    "driver_age",
+    "payment_frequency",
+    "fuel_type",
+    "seat_category",
+    "business_type",
+]
+assert final_definition["splines"] == {"driver_age": 3}
+assert round(TWEEDIE_POWER, 3) == 1.744 and len(final_fit.params) == 15
+
+# %% [markdown]
+# ### 4.11 Koeffisienter
+#
+# Koeffisientene er log-relativiteter i dette datasettet, ikke kausale effekter.
+
+# %%
 display(final_fit.summary())
 
 # %% [markdown]
 # ## 5. CatBoost-diagnostikk av residualstruktur
 #
-# Vi spør om det finnes struktur i middelverdien som den valgte Tweedie-GLM-en
-# ikke fanger. CatBoost er kun en diagnose og velger aldri GLM-variabler.
+# Finnes det struktur i middelverdien som den valgte GLM-en ikke fanger? CatBoost
+# brukes kun som diagnose og velger aldri GLM-variabler.
 #
 # $$
 # z_i=\frac{R_i}{\hat\mu_{i,\mathrm{inner\ OOF}}},
@@ -459,7 +492,7 @@ display(final_fit.summary())
 # CatBoosts korreksjonsfaktor lært med Poisson-loss. **Indre CV** (fem nye
 # `insured_id`-folder inne i hver ytre treningsdel) lager $z_i$, så CatBoost
 # aldri trener på prediksjoner fra en GLM som har sett raden. **Ytre CV** måler
-# gevinsten på forsikrede CatBoost ikke har sett. Dybde 1 er additiv, dybde 3 kan
+# gevinsten på forsikrede CatBoost ikke har sett. Dybde 1 er additiv; dybde 3 kan
 # også fange interaksjoner.
 
 # %%
@@ -479,10 +512,10 @@ assert_residual_diagnostics_result(
 # %% [markdown]
 # ### 5.1 Finnes det residualstruktur?
 #
-# Tabellen sammenligner GLM-en med en konstant korreksjon (bare nivå) og to
-# CatBoost-dybder, beregnet på alle OOF-rader. `delta_*` er reduksjon i deviance
-# (positivt er bedre), `better_than_*_folds` teller ytre folder med gevinst og
-# `oof_ae` er faktisk delt på predikert skadekostnad.
+# GLM-en sammenlignet med en konstant korreksjon (bare nivå) og to CatBoost-dybder
+# på alle OOF-rader. `delta_*` er reduksjon i deviance (positivt er bedre),
+# `better_than_*_folds` teller ytre folder med gevinst og `oof_ae` er faktisk delt
+# på predikert skadekostnad.
 
 # %%
 display(build_residual_diagnostic_summary(residual_diagnostics).round(4))
@@ -491,23 +524,12 @@ display(build_residual_diagnostic_summary(residual_diagnostics).round(4))
 residual_overview_figure = plot_residual_diagnostic_overview(residual_diagnostics)
 
 # %% [markdown]
-# **Begrensning.** GLM-en er valgt ved gjentatt bruk av de samme ytre foldene.
-# Diagnostikken er derfor en utviklingsdiagnose, ikke en uavhengig test og ikke
-# en evaluering av hele seleksjonsprosedyren. Fravær av gevinst er ikke bevis for
-# fravær av struktur: skadekostnaden er skjev og dominert av få storskader, så
-# den statistiske styrken er lav.
-
-# %% [markdown]
 # ## 6. OOF-diagnostikk av Tweedie-GLM-en
 #
-# Residualene er eksponeringsvektede Tweedie deviance-residualer, beregnet fra
-# prediksjoner fra folden der poliseåret ikke inngikk i tilpasningen. Skadefrie år
-# ligger i et eget negativt bånd (residualen er da bare en funksjon av
-# $\hat\mu_i$), så spredningen er ikke normal. LOWESS-kurvene er visuelle
-# hjelpemidler, ikke hypotesetester, og bør ligge nær null.
-#
-# Frekvensnotebookens rootogram er utelatt: det teller heltallige skadeantall,
-# mens Tweedie-responsen er kontinuerlig med punktmasse i null.
+# Eksponeringsvektede Tweedie deviance-residualer fra folden der poliseåret ikke
+# inngikk i tilpasningen. Skadefrie år ligger i et eget negativt bånd (residualen er
+# da bare en funksjon av $\hat\mu_i$), så spredningen er ikke normal. LOWESS-kurvene
+# er visuelle hjelpemidler, ikke tester, og bør ligge nær null.
 
 # %%
 oof_premium = cv_results[final_model]["oof"]
@@ -534,3 +556,55 @@ continuous_predictors = [
 oof_predictor_figure = plot_oof_residuals_by_continuous_predictor(
     model_frame, continuous_predictors, oof_residuals
 )
+
+# %% [markdown]
+# ## 7. Variabelsjekk
+#
+# Alle tilgjengelige variabler skal ha vært kandidater, og alle øvrige kolonner i
+# utviklingsdataene skal være utelatt med begrunnelse. Kontrollen feiler ellers.
+
+# %%
+tested_terms = [*LOCKED, *CORE, GEOGRAPHY, *ADDITIONAL]
+variable_coverage = build_variable_coverage(
+    development,
+    AVAILABLE_COLUMNS,
+    tested_terms,
+    final_specification["required_columns"],
+)
+display(variable_coverage)
+
+# %% [markdown]
+# ## 8. Låst modell
+#
+# Den endelige modellen (§4.10) er allerede tilpasset på alle utviklingsdata.
+# Den lagres som `models/tweedie.joblib`, lastes på nytt og kontrolleres mot
+# notebookens egne prediksjoner.
+
+# %%
+display(lock_glm("tweedie", final_specification, final_fit, final_design, development))
+
+# %% [markdown]
+# ## 9. Begrensninger
+#
+# - **Optimistisk utviklingsscore.** Alle valg (funksjonsform, tillegg,
+#   interaksjoner, ablasjon) er gjort på de samme fem foldene. Pooled OOF-deviance
+#   (33,26) er derfor et optimistisk mål på ytelse på nye data. I §4.8 ligger
+#   gevinstene på 1,3–1,6 standardfeil, unntatt `business_type` (2,9).
+# - **Lite signal.** 55 246 poliseår, ca. 10 % med skade (5 698 skadepoliseår).
+#   Cox–Snell pseudo-$R^2$ er 0,006, og koeffisientene har brede intervaller.
+#   CatBoost-diagnostikken (§5.1) gir bare 0,0061 lavere pooled deviance for dybde 3,
+#   men styrken er lav, så fravær av gevinst er ikke bevis for fravær av struktur.
+# - **Låst $p$.** $p = 1{,}744$ er utledet fra severity-dispersjonen og hviler på
+#   Gamma-fordelte skader med konstant CV. Estimatet er følsomt for storskader: uten
+#   de 1 % største snittskadene faller det fra ca. 1,74 til ca. 1,62. Det er ikke
+#   gjort noen sensitivitetsanalyse av sluttmodellen ved andre $p$.
+# - **Modellantakelser.** Log-link gir multiplikative effekter, og dispersjonen er
+#   konstant. Bare tre interaksjoner er testet; `driver_age*log_vehicle_value` ga
+#   lavere deviance (−0,0061) men besto ikke seleksjonsregelen (§4.9). Koeffisientene
+#   er assosiasjoner, ikke kausale effekter.
+# - **Årseffekt.** `year` er en låst kategorisk term og 2024 finnes ikke i
+#   treningsdata, så 2024 skåres med 2023-nivået. Det er ingen trend-ekstrapolering,
+#   og årsdrift blir liggende i porteføljebalansen.
+# - **Klipping.** Numeriske prediktorer klippes til treningsområdet ved skåring
+#   (se `src_model_comparison/locked_models.py`), så modellen er flat utenfor det
+#   observerte området.

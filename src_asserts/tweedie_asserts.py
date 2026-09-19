@@ -66,13 +66,3 @@ def assert_tweedie_spec(spec):
     )
 
 
-def assert_tweedie_fit(result, design, spec):
-    """Fittet modell bruker eksponering som var_weights og har ingen offset/eksponering."""
-    require(
-        np.allclose(result.model.var_weights, design[spec["weight"]]),
-        "var_weights må være total_exposure.",
-    )
-    require(
-        result.model.offset is None and result.model.exposure is None,
-        "Tweedie-modellen skal ikke ha offset eller eksponeringsledd.",
-    )

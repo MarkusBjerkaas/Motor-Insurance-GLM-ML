@@ -155,7 +155,9 @@ def clean_motor_data(frame, variable_dictionary):
         cleaned["insured_id"].eq(23744)
         & cleaned["year"].eq(2022)
     )
-    if int(missing_liability_exposure.sum()) != 1:
+    # Korreksjonen gjelder én rad i 2022; en ramme uten 2022 (f.eks. bare teståret) har ingen.
+    expected_corrections = 1 if cleaned["year"].eq(2022).any() else 0
+    if int(missing_liability_exposure.sum()) != expected_corrections:
         raise ValueError(
             "Forventet nøyaktig én avtalt korreksjon av ansvarseksponering."
         )

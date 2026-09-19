@@ -30,20 +30,25 @@ def _require_test_approval(approval_code):
         )
 
 
-def build_approved_test_frame(retained_brands, *, approval_code, data_path=DATA_PATH):
-    """Les og klargjør kun 2024 etter eksplisitt godkjenning.
+def prepare_scoring_frame(raw_frame, retained_brands):
+    """Samme rensing, avgrensning og prediktorer som i utviklingskjeden.
 
     Brand-poolingen er lært fra utviklingsdata og sendes inn som ``retained_brands``.
-    Dermed brukes ingen informasjon fra teståret til feature engineering.
+    Funksjonen leser ingen filer, så den kan prøves på et utviklingsår (tørrkjøring).
     """
+    cleaned, _ = clean_motor_data(raw_frame, build_variable_dictionary())
+    scored = select_own_damage_scope(cleaned)
+    return add_transparent_predictors(scored, retained_brands)
+
+
+def build_approved_test_frame(retained_brands, *, approval_code, data_path=DATA_PATH):
+    """Les og klargjør kun 2024 etter eksplisitt godkjenning."""
     _require_test_approval(approval_code)
     chunks = pd.read_csv(
         data_path, sep=";", encoding="utf-8", low_memory=False, chunksize=100_000
     )
     raw_test = pd.concat([chunk.loc[chunk["year"].eq(TEST_YEAR)] for chunk in chunks])
-    cleaned_test, _ = clean_motor_data(raw_test, build_variable_dictionary())
-    test = select_own_damage_scope(cleaned_test)
-    test = add_transparent_predictors(test, retained_brands)
+    test = prepare_scoring_frame(raw_test, retained_brands)
     if test.empty or not test["year"].eq(TEST_YEAR).all():
         raise ValueError("Testgrunnlaget må bestå av minst én rad, og kun av 2024.")
     return test
@@ -62,8 +67,14 @@ def evaluate_pricing_models(test_frame, predictors: Mapping[str, Callable], powe
     rows, predictions = [], {}
     for name, predict in predictors.items():
         prediction = pd.Series(predict(test_frame), index=test_frame.index, dtype=float)
-        if prediction.isna().any() or (~np.isfinite(prediction)).any() or prediction.le(0).any():
-            raise ValueError(f"{name}: prediksjoner må være endelige og strengt positive.")
+        if (
+            prediction.isna().any()
+            or (~np.isfinite(prediction)).any()
+            or prediction.le(0).any()
+        ):
+            raise ValueError(
+                f"{name}: prediksjoner må være endelige og strengt positive."
+            )
         predictions[name] = prediction
         observed_cost = test_frame["property_incurred"].sum()
         predicted_cost = (prediction * exposure).sum()
@@ -91,12 +102,25 @@ def build_calibration_table(test_frame, predictions, n_bins=10):
     tables = []
     for name, prediction in predictions.items():
         groups = pd.qcut(prediction.rank(method="first"), q=n_bins, duplicates="drop")
-        frame = pd.DataFrame({"prediction": prediction, "observed": observed, "weight": exposure, "group": groups})
+        frame = pd.DataFrame(
+            {
+                "prediction": prediction,
+                "observed": observed,
+                "weight": exposure,
+                "group": groups,
+            }
+        )
         summary = frame.groupby("group", observed=True).apply(
-            lambda part: pd.Series({
-                "Predikert ren premie": np.average(part["prediction"], weights=part["weight"]),
-                "Observert ren premie": np.average(part["observed"], weights=part["weight"]),
-            }),
+            lambda part: pd.Series(
+                {
+                    "Predikert ren premie": np.average(
+                        part["prediction"], weights=part["weight"]
+                    ),
+                    "Observert ren premie": np.average(
+                        part["observed"], weights=part["weight"]
+                    ),
+                }
+            ),
             include_groups=False,
         )
         summary["Modell"] = name
@@ -109,10 +133,26 @@ def plot_test_comparison(summary, calibration):
     """Vis én kompakt figur: kalibrering og total porteføljebalanse."""
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.5))
     for name, part in calibration.groupby("Modell", observed=True):
-        axes[0].plot(part["Predikert ren premie"], part["Observert ren premie"], marker="o", label=name)
+        axes[0].plot(
+            part["Predikert ren premie"],
+            part["Observert ren premie"],
+            marker="o",
+            label=name,
+        )
     limit = max(calibration[["Predikert ren premie", "Observert ren premie"]].max())
-    axes[0].plot([0, limit], [0, limit], "--", color="black", linewidth=1, label="Perfekt kalibrering")
-    axes[0].set(title="Kalibrering etter prediksjonsgruppe", xlabel="Predikert ren premie", ylabel="Observert ren premie")
+    axes[0].plot(
+        [0, limit],
+        [0, limit],
+        "--",
+        color="black",
+        linewidth=1,
+        label="Perfekt kalibrering",
+    )
+    axes[0].set(
+        title="Kalibrering etter prediksjonsgruppe",
+        xlabel="Predikert ren premie",
+        ylabel="Observert ren premie",
+    )
     axes[0].legend(fontsize=8)
     axes[1].bar(summary["Modell"], summary["Balanse (%)"])
     axes[1].axhline(0, color="black", linewidth=1)
