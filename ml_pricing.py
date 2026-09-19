@@ -10,45 +10,28 @@
 # ---
 
 # %% [markdown]
-# # ML-utfordrere for egen-skadeprising
+# # CatBoost-utfordrer for ren egen-skadepremie
 #
-# Notebooken setter opp CatBoost og LightGBM for tre mål: frekvens, severity og
-# pure premium. Den bruker bare utviklingsårene 2022–2023; modellene fittes og
-# sammenlignes i en senere, eksplisitt CV-celle.
+# Notebooken utvikler én CatBoost-modell for forventet ren egen-skadepremie.
+# Den bruker bare utviklingsårene 2022–2023. Teståret 2024 er urørt og brukes
+# først i en senere, låst sammenligning av alle ferdigspesifiserte modeller.
 
 # %%
-import numpy as np
-import pandas as pd
-from catboost import CatBoostRegressor
-from lightgbm import LGBMRegressor
-from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.model_selection import GroupKFold
+from IPython.display import display
 
-from src_core_glm.model_data import (
-    assert_development_years,
-    build_development_frames,
-    to_model_frame,
+from src_core_glm.model_data import build_development_frames
+from src_ml.catboost_pricing import (
+    build_catboost_result_table,
+    fit_catboost_grid,
+    plot_catboost_diagnostics,
+    prepare_catboost_features,
 )
-from src_severity.severity_data import build_severity_inputs
+from src_tweedie.tweedie_data import build_tweedie_frame
 
 SEED = 100
-N_FOLDS = 5
-TWEEDIE_POWER = 1.5
-
-# %% [markdown]
-# ## 1. Felles datagrunnlag og mål
-#
-# Frekvens bruker skadeantall med eksponering som vekt, severity bruker
-# gjennomsnittsskade på positive skadeår med skadeantall som vekt, og pure
-# premium modellerer samlet kostnad per eksponeringsår med eksponering som vekt.
-
-# %%
-frames = build_development_frames()
-development = frames["development"]
-assert_development_years(development)
+N_SPLITS = 5
+# Låst fra severity-implisert Tweedie-power i Tweedie-GLM-løpet (T-05).
+TWEEDIE_POWER = 1.744
 
 PREDICTORS = [
     "policy_type",
@@ -64,167 +47,98 @@ PREDICTORS = [
     "vehicle_brand_pooled",
     "seats",
 ]
-model_columns = [
-    "insured_id",
-    "total_exposure",
-    "property_claims",
-    "property_incurred",
-    *PREDICTORS,
-]
-model_frame = to_model_frame(development, model_columns)
-model_frame["claim_frequency"] = (
-    model_frame["property_claims"] / model_frame["total_exposure"]
-)
-model_frame["pure_premium"] = (
-    model_frame["property_incurred"] / model_frame["total_exposure"]
-)
-severity_frame = build_severity_inputs(development)["severity_frame"]
 
-# %%
-TARGETS = {
-    "frequency": {
-        "frame": model_frame,
-        "target": "property_claims",
-        "weight": "total_exposure",
-        "objective": "poisson",
-    },
-    "severity": {
-        "frame": severity_frame,
-        "target": "average_severity",
-        "weight": "property_claims",
-        "objective": "gamma",
-    },
-    "pure_premium": {
-        "frame": model_frame,
-        "target": "pure_premium",
-        "weight": "total_exposure",
-        "objective": "tweedie",
-    },
+CATEGORICAL_FEATURES = [
+    "policy_type",
+    "year",
+    "fuel_type",
+    "circulation_area",
+    "municipality_type",
+    "payment_frequency",
+    "business_type",
+    "vehicle_brand_pooled",
+]
+
+PARAM_GRID = {
+    "depth": [4, 6],
+    "learning_rate": [0.03, 0.07],
+    "iterations": [300, 600],
+    "l2_leaf_reg": [3.0, 10.0],
 }
 
 # %% [markdown]
-# ## 2. Modellfabrikker og preprocessing
+# ## 1. Datagrunnlag
 #
-# Samme foldvise preprocessing brukes for begge algoritmene. One-hot-koding
-# gjør at kategorinivåer fra valideringsfolden ikke kan lekke inn i treningen.
-# Senere kan CatBoost få en separat native-kategorivariant som utfordrer.
+# Modellrammen bygges gjennom den felles utviklingskjeden. Den filtrerer bort
+# alle andre år enn 2022–2023 før rensing og feature engineering, slik at 2024
+# aldri materialiseres i denne analysen.
 
 # %%
-NUMERIC_COLUMNS = [
-    column for column in PREDICTORS if column not in {
-        "policy_type",
-        "fuel_type",
-        "circulation_area",
-        "municipality_type",
-        "payment_frequency",
-        "business_type",
-        "vehicle_brand_pooled",
-    }
-]
-CATEGORICAL_COLUMNS = [column for column in PREDICTORS if column not in NUMERIC_COLUMNS]
-
-
-def build_preprocessor():
-    """Bygg preprocessing som kan fittes separat i hver CV-fold."""
-    return ColumnTransformer(
-        [
-            (
-                "numeric",
-                SimpleImputer(strategy="median"),
-                NUMERIC_COLUMNS,
-            ),
-            (
-                "categorical",
-                Pipeline(
-                    [
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("one_hot", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                CATEGORICAL_COLUMNS,
-            ),
-        ],
-        remainder="drop",
-    )
-
-
-def build_catboost_model(objective):
-    """Bygg én CatBoost-regressor med samme måltype som LightGBM."""
-    loss = {
-        "poisson": "Poisson",
-        "gamma": "RMSE",
-        "tweedie": f"Tweedie:variance_power={TWEEDIE_POWER}",
-    }[objective]
-    return CatBoostRegressor(
-        loss_function=loss,
-        iterations=500,
-        depth=6,
-        learning_rate=0.05,
-        random_seed=SEED,
-        verbose=False,
-    )
-
-
-def build_lightgbm_model(objective):
-    """Bygg én LightGBM-regressor med eksplisitt objektiv."""
-    parameters = {
-        "objective": objective,
-        "n_estimators": 500,
-        "learning_rate": 0.05,
-        "num_leaves": 31,
-        "random_state": SEED,
-        "verbosity": -1,
-    }
-    if objective == "tweedie":
-        parameters["tweedie_variance_power"] = TWEEDIE_POWER
-    return LGBMRegressor(**parameters)
-
-
-def build_model(algorithm, objective):
-    """Bygg en komplett, foldklar pipeline."""
-    estimator = (
-        build_catboost_model(objective)
-        if algorithm == "catboost"
-        else build_lightgbm_model(objective)
-    )
-    return Pipeline(
-        [("preprocessor", build_preprocessor()), ("model", estimator)]
-    )
+development = build_development_frames()["development"]
+model_frame = build_tweedie_frame(development, PREDICTORS)
+features = prepare_catboost_features(
+    model_frame, PREDICTORS, CATEGORICAL_FEATURES
+)
+response = model_frame["pure_premium"]
+sample_weight = model_frame["total_exposure"]
+groups = model_frame["insured_id"]
 
 # %% [markdown]
-# ## 3. CV-oppsett
+# ## 2. Modell og utviklingsscore
 #
-# Denne cellen definerer bare samme gruppefolder for hvert mål. Selve CV-loopen
-# og scoringen skal implementeres etter at modellspesifikasjonene er gjennomgått.
+# For poliseår $i$ er observert ren premie
+#
+# $$
+# R_i = \frac{S_i}{e_i},
+# $$
+#
+# der $S_i$ er incurred egen-skadekostnad og $e_i$ er eksponering. CatBoost
+# estimerer $\widehat\mu_i = f_\theta(x_i)$ med Tweedie-loss. Hyperparameterne
+# velges ved å minimere eksponeringsvektet Tweedie-deviance
+#
+# $$
+# D_p = \operatorname{mean\_tweedie\_deviance}
+# \left(R, \widehat\mu;\, w=e,\, p\right).
+# $$
+#
+# Modellen anslår forventet kostnad per eksponeringsår; eksponeringen bestemmer
+# hvor mye informasjon hvert poliseår bidrar med. Fem gruppefolder på
+# `insured_id` hindrer at samme forsikringstaker inngår på begge sider av en
+# fold. Resultatene nedenfor er utviklingsresultater, ikke uavhengige estimater.
 
 # %%
-cv_folds = {}
-for target_name, target_config in TARGETS.items():
-    frame = target_config["frame"]
-    group_kfold = GroupKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
-    cv_folds[target_name] = [
-        {
-            "fold": f"gruppe_{number + 1}",
-            "train_index": frame.index[train_positions],
-            "val_index": frame.index[val_positions],
-        }
-        for number, (train_positions, val_positions) in enumerate(
-            group_kfold.split(frame, groups=frame["insured_id"])
-        )
-    ]
+result = fit_catboost_grid(
+    features,
+    response,
+    sample_weight,
+    groups,
+    CATEGORICAL_FEATURES,
+    TWEEDIE_POWER,
+    PARAM_GRID,
+    n_splits=N_SPLITS,
+    seed=SEED,
+)
 
 # %% [markdown]
-# ## 4. Modellregister
+# ## 3. Resultat og diagnostikk
 #
-# Hver måltype får én CatBoost- og én LightGBM-kandidat. Hyperparameterne er
-# bevisst en liten startspesifikasjon; tuning og OOF-evaluering kommer senere.
+# `grid_mean_deviance` er scoren som valgte hyperparameterne. `pooled_oof_deviance`
+# er beregnet fra de samme foldenes OOF-prediksjoner etter at parameterne er
+# valgt, og er derfor seleksjonspåvirket utviklingsdiagnostikk. Nullmodellen
+# bruker bare treningsfoldens eksponeringsvektede gjennomsnitt i hver fold.
 
 # %%
-model_registry = {
-    target_name: {
-        algorithm: build_model(algorithm, target_config["objective"])
-        for algorithm in ("catboost", "lightgbm")
-    }
-    for target_name, target_config in TARGETS.items()
-}
+result_table = build_catboost_result_table(result)
+display(result_table.round(4))
 
+# %%
+figure = plot_catboost_diagnostics(result)
+
+# %% [markdown]
+# ## 4. Konklusjon
+#
+# Den valgte CatBoost-spesifikasjonen er nå en direkte utfordrer for ren premie
+# på samme utviklingspopulasjon, med samme Tweedie-power og gruppefolder som
+# GLM-løpet. Endelig sammenligning med Tweedie-GLM og todelt GLM skjer først på
+# det urørte teståret 2024, etter at alle spesifikasjoner og evalueringsregler
+# er låst.

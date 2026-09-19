@@ -416,3 +416,4 @@ Leveransen er ferdig når:
 | Dato | Fase | Vurdering / endring |
 |---|---|---|
 | 2026-09-19 | Planlegging | Erstattet det brede CatBoost/LightGBM-skjelettet med plan for én direkte CatBoost Tweedie-modell. Låste vanlig femfolds gruppe-`GridSearchCV`, native kategorier, lite fireparameters grid, begrensede asserts og senere engangsevaluering på urørt 2024. Ingen implementasjon eller datakjøring utført i denne fasen. |
+| 2026-09-19 | Implementering | Implementerte én direkte CatBoost-Tweedie-utfordrer i `ml_pricing` og `src_ml/`, med native kategorier, fem gruppefolder, eksponeringsvektet deviance og OOF-diagnostikk. Låste $p=1.744$ fra Tweedie-GLM-løpet. Full utviklingskjøring valgte depth 4, 300 iterasjoner, learning rate 0.03 og $l_2$-regularisering 3.0; pooled OOF-deviance var 33.2775 mot 34.0919 for foldvis nullmodell ($D^2=0.0239$). 2024 ble ikke lest. Midlertidige kontrollpunkter ble ikke beholdt i leveransekoden etter brukerønske. |
