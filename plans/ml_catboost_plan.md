@@ -16,7 +16,7 @@ Implementasjonen skal være bevisst enkel:
 - native behandling av kategoriske variabler;
 - én resultattabell og én diagnostikkfigur.
 
-`ml_pricing.py` er et tidlig utkast, ikke en implementeringskontrakt. Eksisterende
+`05_catboost.py` er et tidlig utkast, ikke en implementeringskontrakt. Eksisterende
 kode kan og skal slettes, endres eller skrives over når den er feil, uferdig
 eller gjør notebooken unødvendig komplisert. Spesielt skal LightGBM, separate
 frekvens-/severitymodeller, one-hot-koding, hardkodet `TWEEDIE_POWER = 1.5` og
@@ -164,7 +164,7 @@ parallelliser både `GridSearchCV` og CatBoost aggressivt samtidig.
 
 ## 6. Filstruktur og ansvar
 
-### `ml_pricing.py` / `ml_pricing.ipynb`
+### `05_catboost.py` / `05_catboost.ipynb`
 
 Notebooken skal eie og synliggjøre:
 
@@ -359,14 +359,14 @@ er en reell modellforutsetning, ikke grunn til å bruke 2024.
 3. Opprett `src_ml/__init__.py` og `src_ml/catboost_pricing.py`.
 4. Opprett `src_asserts/ml_asserts.py` med bare de målrettede kontrollene i
    seksjon 7.
-5. Skriv om `ml_pricing.py` etter notebookstrukturen i seksjon 6. Gjenbruk
+5. Skriv om `05_catboost.py` etter notebookstrukturen i seksjon 6. Gjenbruk
    `build_development_frames`, `build_tweedie_frame` og eksisterende
    gruppefoldprinsipper.
 6. Kjør raske, utviklingsbaserte funksjonskontroller før hele gridet.
 7. Kjør notebooken fullt, vurder tabell og figur, og oppdater konklusjonen med
    de faktiske utviklingsresultatene uten å overtolke dem.
 8. Synkroniser paret med:
-   `uv run jupytext --sync ml_pricing.py`.
+   `uv run jupytext --sync 05_catboost.py`.
 9. Kjør den synkroniserte notebooken på nytt og bekreft at output er
    reproduserbar og faglig plausibel.
 10. Oppdater denne planens endringslogg med implementerte valg, avvik og
@@ -378,11 +378,11 @@ er en reell modellforutsetning, ikke grunn til å bruke 2024.
 Alle Python-kommandoer skal kjøres med `uv`:
 
 ```bash
-uv run jupytext --sync ml_pricing.py
-uv run jupyter nbconvert --to notebook --execute ml_pricing.ipynb \
-  --output /tmp/ml_pricing.executed.ipynb \
+uv run jupytext --sync 05_catboost.py
+uv run jupyter nbconvert --to notebook --execute 05_catboost.ipynb \
+  --output /tmp/05_catboost.executed.ipynb \
   --ExecutePreprocessor.timeout=1800
-uv run ruff check ml_pricing.py src_ml src_asserts/ml_asserts.py
+uv run ruff check 05_catboost.py src_ml src_asserts/ml_asserts.py
 ```
 
 Bruk en eksplisitt midlertidig outputfil ved utførelse slik at en feilet kjøring
@@ -416,4 +416,4 @@ Leveransen er ferdig når:
 | Dato | Fase | Vurdering / endring |
 |---|---|---|
 | 2026-09-19 | Planlegging | Erstattet det brede CatBoost/LightGBM-skjelettet med plan for én direkte CatBoost Tweedie-modell. Låste vanlig femfolds gruppe-`GridSearchCV`, native kategorier, lite fireparameters grid, begrensede asserts og senere engangsevaluering på urørt 2024. Ingen implementasjon eller datakjøring utført i denne fasen. |
-| 2026-09-19 | Implementering | Implementerte én direkte CatBoost-Tweedie-utfordrer i `ml_pricing` og `src_ml/`, med native kategorier, fem gruppefolder, eksponeringsvektet deviance og OOF-diagnostikk. Låste $p=1.744$ fra Tweedie-GLM-løpet. Full utviklingskjøring valgte depth 4, 300 iterasjoner, learning rate 0.03 og $l_2$-regularisering 3.0; pooled OOF-deviance var 33.2775 mot 34.0919 for foldvis nullmodell ($D^2=0.0239$). 2024 ble ikke lest. Midlertidige kontrollpunkter ble ikke beholdt i leveransekoden etter brukerønske. |
+| 2026-09-19 | Implementering | Implementerte én direkte CatBoost-Tweedie-utfordrer i `05_catboost` og `src_ml/`, med native kategorier, fem gruppefolder, eksponeringsvektet deviance og OOF-diagnostikk. Låste $p=1.744$ fra Tweedie-GLM-løpet. Full utviklingskjøring valgte depth 4, 300 iterasjoner, learning rate 0.03 og $l_2$-regularisering 3.0; pooled OOF-deviance var 33.2775 mot 34.0919 for foldvis nullmodell ($D^2=0.0239$). 2024 ble ikke lest. Midlertidige kontrollpunkter ble ikke beholdt i leveransekoden etter brukerønske. |

@@ -4,7 +4,7 @@ De fire generiske byggesteinene (``prepare_design_frame``, ``glm_spec``,
 ``fit_glm``, ``cross_validate_glm``) og hjelpefunksjonene
 ``cross_validate_glm`` kaller i hver fold (``prepare_fold_frames``,
 ``apply_derived_columns``, ``check_fold_fit``) ligger samlet her, slik at
-både ``glm_pricing_models.py`` (frekvens/severity/pure premium) og nye
+både ``02_frekvens`` (frekvens/severity/pure premium) og nye
 fasenotebooker kan importere dem uten å duplisere logikken. ``run_glm`` er
 notebook-spesifikk (bruker ``TARGETS`` og ``display``) og ligger fortsatt i
 notebooken.

@@ -38,7 +38,7 @@ def sync_pair(root: Path, notebook_name: str, source_name: str) -> None:
     with tempfile.TemporaryDirectory(
         dir=root, prefix=f".{source_path.stem}-sync-"
     ) as temporary_directory:
-        temporary_path = Path(temporary_directory) / source_name
+        temporary_path = Path(temporary_directory) / Path(source_name).name
         subprocess.run(
             [
                 uv_command,
@@ -65,9 +65,15 @@ def main() -> None:
 
     root = project_root(Path(event.get("cwd", Path.cwd())))
     for notebook_name, source_name in (
-        ("analysis.ipynb", "analysis.py"),
-        ("tweedie.ipynb", "tweedie.py"),
-        ("ml_pricing.ipynb", "ml_pricing.py"),
+        (f"{name}.ipynb", f"py_mirrors/{name}.py")
+        for name in (
+            "01_descriptiv",
+            "02_frekvens",
+            "03_severity",
+            "04_tweedie",
+            "05_catboost",
+            "model_results",
+        )
     ):
         sync_pair(root, notebook_name, source_name)
 

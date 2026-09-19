@@ -173,7 +173,7 @@ Ikke endre seleksjonslogikken i `src_core_glm/model_selection.py`.
 
 ## 7. Korreksjon av severity-foldene
 
-`glm_pricing_severity.py` skal hente både `model_frame` og `severity_frame`.
+`03_severity.py` skal hente både `model_frame` og `severity_frame`.
 Foldene bygges på hele `model_frame`, mens kontrakten per fold er
 
 ```text
@@ -313,9 +313,9 @@ koeffisienter eller scorer og ikke velg modell.
 Unngå samtidige skrivere i felles filer:
 
 1. **Core og asserts:** `src_core_glm/`, `src_asserts/` og syntetiske tester.
-2. **Severity:** `src_severity/` og `glm_pricing_severity.py` etter core.
-3. **Frekvens:** `src_frequency/` og `glm_pricing_models.py` etter core.
-4. **Tweedie:** `src_tweedie/`, `tweedie.py` og denne planen etter core.
+2. **Severity:** `src_severity/` og `03_severity.py` etter core.
+3. **Frekvens:** `src_frequency/` og `02_frekvens.py` etter core.
+4. **Tweedie:** `src_tweedie/`, `04_tweedie.py` og denne planen etter core.
 5. **Integrasjon:** primært read-only kontroll etter de øvrige pakkene.
 
 Alle notebookendringer gjøres i `.py`-speilene, aldri direkte i `.ipynb`.
@@ -369,4 +369,4 @@ brukerens bekreftelse.
 | 2026-09-19 | Kandidatregister, forover-seleksjon og $p$ | Kandidatregisteret er låst (T-07) og forover-seleksjon med flere tillegg, interaksjoner og ablasjon er implementert i notebooken (T-09). **Avvik:** Pearson-estimering av $p$ ga ingen gyldig rot på reelle data og er erstattet av severity-implisert $p$ (T-05), med limitation dokumentert i notebooken; Pearson-koden er fjernet. §3.2, §9, §10 og §14 skrevet om. Frekvens og severity er uendret; portering av algoritmen er planlagt senere og krever egen godkjenning. |
 | 2026-09-19 | Firleddsregel og diagnostikk | Lagt til 1-SE-krav (T-10) i Tweedie-seleksjonen etter brukers ønske om færre variabelendringer, og residualdiagnostikk i notebooken (T-11). `select_candidate_stage` fikk valgfri `se_multiplier`; `plot_oof_residuals_against_fitted` fikk valgfrie akse- og tittelparametere (standard uendret). `run_round`/`run_stepwise` tar nå `evaluate_models(navn_liste)` i stedet for `evaluate_model(navn)`; notebooken kjører kandidatene parallelt med joblib (`N_JOBS = 8`), og utvalget er identisk med sekvensiell kjøring (verifisert). Frekvens og severity er uendret. |
 | 2026-09-19 | Rapportering av valget | Lagt til T-12: forover-seleksjonstabell med SE (§4.8), topp-3 konkurrerende modeller (§4.9) og statsmodels-sammendrag av valgt modell (§4.10). Ingen endring i seleksjonsregelen eller valgt modell. Frekvens og severity er uendret. |
-| 2026-09-19 | Portering til frekvens og severity | Algoritmen og strukturen er innført i `glm_pricing_models` og `glm_pricing_severity` (T-13). Modellagnostisk kode er flyttet til `src_core_glm/`; Tweedie-notebooken er uendret i oppførsel (topp-3-tabellen bruker nå `build_top_models_table`, samme innhold). Frekvens: kjerne inkl. `payment_frequency`; severity: kjerne som før og geografitest kommunetype mot kjøresone. Se planene for frekvens og severity. |
+| 2026-09-19 | Portering til frekvens og severity | Algoritmen og strukturen er innført i `02_frekvens` og `03_severity` (T-13). Modellagnostisk kode er flyttet til `src_core_glm/`; Tweedie-notebooken er uendret i oppførsel (topp-3-tabellen bruker nå `build_top_models_table`, samme innhold). Frekvens: kjerne inkl. `payment_frequency`; severity: kjerne som før og geografitest kommunetype mot kjøresone. Se planene for frekvens og severity. |

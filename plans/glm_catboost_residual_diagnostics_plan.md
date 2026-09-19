@@ -183,9 +183,9 @@ modulkommandoen for testkjøring fungerer likt i alle miljøer.
 
 ### Notebookfiler som integreres senere i samme leveranse
 
-- `glm_pricing_models.py`
-- `glm_pricing_severity.py`
-- `tweedie.py`
+- `02_frekvens.py`
+- `03_severity.py`
+- `04_tweedie.py`
 
 Bare `.py`-speilene redigeres. Tilhørende `.ipynb` synkroniseres med
 `uv run jupytext --sync <notebook>.py` etter verifisert kodeendring.
@@ -378,8 +378,8 @@ data, er derfor utenfor omfanget og krever planrevisjon.
 - Kolonneordenen skal være identisk med `feature_columns`.
 
 Native kategorier velges fremfor notebookens foreløpige one-hot-oppsett i
-`ml_pricing.py`, fordi dette er en egen residualdiagnostikk med eksplisitt
-foldkontrakt. Koden fra `ml_pricing.py` skal ikke importeres.
+`05_catboost.py`, fordi dette er en egen residualdiagnostikk med eksplisitt
+foldkontrakt. Koden fra `05_catboost.py` skal ikke importeres.
 
 ## 9. Returkontrakt
 
@@ -625,7 +625,7 @@ Hver notebook deklarerer en blokklistet samling som minst dekker:
 - rå skadeantall og skadekostnad;
 - alle eksisterende OOF-/residual-/prediksjonskolonner.
 
-### 12.4 Frekvens: `glm_pricing_models.py`
+### 12.4 Frekvens: `02_frekvens.py`
 
 - Legg seksjonen etter at `review_specification` er bestemt og før dagens
   visuelle OOF-residualdiagnostikk.
@@ -635,7 +635,7 @@ Hver notebook deklarerer en blokklistet samling som minst dekker:
 - Notebooken skal bare inneholde feature-/blokkliste, ett funksjonskall, én
   oppsummeringstabell og figurkall.
 
-### 12.5 Severity: `glm_pricing_severity.py`
+### 12.5 Severity: `03_severity.py`
 
 - Legg seksjonen etter at `final_specification` er låst og før det avsluttende
   statsmodels-sammendraget.
@@ -644,7 +644,7 @@ Hver notebook deklarerer en blokklistet samling som minst dekker:
 - Diagnostikken kjøres bare på dagens positive severity-populasjon; den skal
   ikke konstruere eller koble inn rader uten skade.
 
-### 12.6 Tweedie: `tweedie.py`
+### 12.6 Tweedie: `04_tweedie.py`
 
 - Integrasjon skjer først når valgt power og variabelspesifikasjon er låst i
   notebooken.

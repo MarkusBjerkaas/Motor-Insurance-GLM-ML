@@ -16,10 +16,10 @@ src_temp/
 src_archive/
 
 # Jupytext working copies; the paired notebooks are versioned
-analysis.py
-bonus_score_analysis.py
-glm_pricing_models.py
-glm_pricing_severity.py
+py_mirrors/01_descriptiv.py
+py_mirrors/02_frekvens.py
+py_mirrors/03_severity.py
+temp/py_mirrors/
 
 # Cache av CV-resultater på disk (se cross_validate_candidate)
 .cv_cache/

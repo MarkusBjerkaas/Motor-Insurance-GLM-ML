@@ -1,4 +1,4 @@
-"""Diagnostikk for Tweedie-modellen i ``tweedie.py``."""
+"""Diagnostikk for Tweedie-modellen i ``04_tweedie``."""
 
 import statsmodels.api as sm
 

@@ -1,4 +1,4 @@
-"""Tabeller og diagnostikk for GLM-modelleringen i ``glm_pricing_models.py``.
+"""Tabeller og diagnostikk for GLM-modelleringen i ``02_frekvens``.
 
 Modellspesifikasjoner, CV-folder og CV-sløyfen ligger i notebooken. Her ligger
 bare funksjoner som beskriver data og folder og oppsummerer resultatene.

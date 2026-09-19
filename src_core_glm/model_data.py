@@ -1,9 +1,9 @@
 """Felles datagrunnlag for egen-skademodellene.
 
 Modulet samler stegene som gjør den rensede porteføljen om til de rammene
-modellene trenger. Stegene ble først utviklet og begrunnet i ``analysis.py``
-(seksjon 11, 12 og 17). De ligger her slik at ``analysis.py`` og
-``glm_pricing_models.py`` bruker nøyaktig samme populasjon, splitt og
+modellene trenger. Stegene ble først utviklet og begrunnet i ``01_descriptiv``
+(seksjon 11, 12 og 17). De ligger her slik at ``01_descriptiv`` og
+``02_frekvens`` bruker nøyaktig samme populasjon, splitt og
 prediktorer:
 
 1. **Avgrensning** (``select_own_damage_scope``): poliseår med kaskoprodukt
@@ -85,7 +85,7 @@ def add_transparent_predictors(frame, retained_brand_levels):
     """Legg til kun forhåndsdefinerte, ikke-responsbaserte prediktorer.
 
     - ``driving_experience_years``: føreralder minus alder ved førerkorterverv
-      (arbeidshypotesen fra seksjon 17 i ``analysis.py``).
+      (arbeidshypotesen fra seksjon 17 i ``01_descriptiv``).
     - ``log_vehicle_value``: log av bilverdien, som gir en multiplikativ tolkning.
     - ``performance_hp_per_tonne``: ``1000 / power_to_weight_ratio``, slik at
       høyere verdi betyr høyere ytelse. Manglende input forblir manglende.

@@ -16,23 +16,29 @@ ALDRI! Inspisere, lese, loade, trene på, eller bruke test settet fra 2024 på n
 
 ## Filstruktur
 
-- `analysis.ipynb` — hoveddokumentet. Alt av modellspesifikasjon, loss-funksjoner og kritisk feature engineering skal ligge her (eller importeres og kjøres her). Dette er det som skal vise hva jeg kan, så det kritiske hører hjemme her, ikke gjemt i en script-fil.
-- `glm_pricing_models.ipynb` — modelleringsnotebook for GLM-benchmarken på egen skade (fase 1–4: frekvens, severity/storskader, todelt modell mot Tweedie, konsolidert benchmark). All kode for modellspesifikasjoner og CV-definisjon skrives her; diagnostikk, tabeller og plott kan ligge i `src/` og importeres. Inneholder et beslutningsregister (B-xx) som skal holdes oppdatert.
-- `bonus_score_analysis.ipynb` — separat diagnostikk av tidsplasseringen til `bonus_score`.
-- `src_core_glm/model_data.py` — felles datagrunnlag (avgrensning, tidssplitt, merke-pooling, transparente prediktorer) brukt av både `analysis` og `glm_pricing_models`. Endringer her må verifiseres ved å kjøre begge notebooks.
+- Notebooks ligger i prosjektroten og er nummerert i kjeden de kjøres:
+  - `01_descriptiv.ipynb` — datagrunnlag, rensing og deskriptiv analyse (kun 2022–2023).
+  - `02_frekvens.ipynb` — Poisson-frekvens (GLM). Inneholder seleksjonsløpet og et beslutningsregister som skal holdes oppdatert.
+  - `03_severity.ipynb` — Gamma-severity (GLM), også grunnlaget for Tweedie-power.
+  - `04_tweedie.ipynb` — Tweedie-GLM på ren premie.
+  - `05_catboost.ipynb` — CatBoost-utfordrer (siste modell i kjeden).
+  - `model_results.ipynb` — endelig out-of-sample-evaluering av de låste modellene. Navnet er fast.
+  All kode for modellspesifikasjon, seleksjonsregler og CV-definisjon skrives i notebooken; diagnostikk, tabeller og plott kan ligge i `src_*` og importeres.
+- `py_mirrors/` — jupytext-speil (`.py`, percent-format) av alle notebooks; se workflow under. `temp/` — midlertidige notebooks som skal fjernes (nå `bonus_score_analysis`, med eget speil i `temp/py_mirrors/`). Den må kjøres med prosjektroten som arbeidsmappe (relative `data/`-stier). `models/` — låste, refittede modeller (`*.joblib`) som `model_results` laster. `docs/` — litteratur og andre dokumenter.
+- `src_core_glm/model_data.py` — felles datagrunnlag (avgrensning, tidssplitt, merke-pooling, transparente prediktorer) brukt av alle modellnotebooks. Endringer her må verifiseres ved å kjøre notebookene.
 - `plans/` — styringsdokumenter for modelleringsløpet, f.eks. `plans/glm_pricing_models_plan.md`. **Planen er levende: ved starten av hver ny fase skal den leses, revurderes mot resultatene fra forrige fase og skrives om ved behov.** Hver revurdering logges i planens endringslogg (også når ingenting endres), og vesentlige endringer legges frem for meg før implementeringen starter.
 - `src_core_glm/`, `src_descriptives/`, `src_frequency/` og `src_severity/` — aktive støttefunksjoner, organisert etter ansvar. `src_archive/` er en lokal, ignorert mappe for ubrukte scripts og skal aldri importeres av en notebook.
 - `src_temp/` — engangs-testscripts som ikke trenger å dokumenteres eller has med i git-historikken.
 
 ## Notebook-workflow — viktig
 
-Gjelder alle jupytext-parede notebooks (`analysis`, `glm_pricing_models`, `bonus_score_analysis`); `analysis` brukes som eksempel under.
+Gjelder alle jupytext-parede notebooks (`01_descriptiv` … `05_catboost`, `model_results`); `02_frekvens` brukes som eksempel under. Parringen er `ipynb,py_mirrors//py:percent`: `NN_navn.ipynb` i roten speiles til `py_mirrors/NN_navn.py`.
 
-Rediger **aldri** `analysis.ipynb` direkte. Rediger alltid `analysis.py` (jupytext percent-format, `# %%`-celler), som er et 1:1-speil av notebooken i ren tekst. Dette er hovedsakelig for token-effektivitet — `.ipynb`-JSON er dyrt å lese og skrive.
+Rediger **aldri** `02_frekvens.ipynb` direkte. Rediger alltid `py_mirrors/02_frekvens.py` (jupytext percent-format, `# %%`-celler), som er et 1:1-speil av notebooken i ren tekst. Dette er hovedsakelig for token-effektivitet — `.ipynb`-JSON er dyrt å lese og skrive.
 
-1. Ved starten av hver prompt kjører en hook automatisk som synker `analysis.py` fra `analysis.ipynb` (bare når ipynb er nyest), i tilfelle notebooken er redigert manuelt i Jupyter siden sist.
-2. Gjør alle endringer i `analysis.py`.
-3. Når endringene er ferdige: synkroniser notebooken med `uv run jupytext --sync analysis.py`. Ikke bruk `jupytext --to ipynb ... --output analysis.ipynb`; denne varianten kan skrive notebooken korrekt, men feile ved Jupytexts interne tidsstempeloppdatering. `--sync` håndterer det parede `.py`/`.ipynb`-settet robust.
+1. Ved starten av hver prompt kjører en hook automatisk som synker `py_mirrors/*.py` fra notebooken (bare når ipynb er nyest), i tilfelle notebooken er redigert manuelt i Jupyter siden sist.
+2. Gjør alle endringer i `py_mirrors/02_frekvens.py`.
+3. Når endringene er ferdige: synkroniser notebooken med `uv run jupytext --sync py_mirrors/02_frekvens.py`. Ikke bruk `jupytext --to ipynb ... --output ...`; denne varianten kan skrive notebooken korrekt, men feile ved Jupytexts interne tidsstempeloppdatering. `--sync` håndterer det parede `.py`/`.ipynb`-settet robust.
 4. Kjør notebooken (eller de relevante cellene) og bekreft at den kjører uten feil og at output ser fornuftig ut.
 5. Først når kjøringen er bekreftet: spør om bekreftelse på commit (som vanlig), og commit.
 

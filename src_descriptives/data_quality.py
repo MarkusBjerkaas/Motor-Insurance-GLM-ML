@@ -1,7 +1,7 @@
 """Datakvalitet, variabeldokumentasjon og integritetsdiagnostikk.
 
 Notebooken bruker dette modulet som et tynt presentasjonslag: beregningene og
-reglene ligger her, mens tabellene vises i ``analysis.py``.
+reglene ligger her, mens tabellene vises i ``01_descriptiv``.
 """
 
 import numpy as np

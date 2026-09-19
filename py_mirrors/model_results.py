@@ -1,7 +1,7 @@
 # ---
 # jupyter:
 #   jupytext:
-#     formats: ipynb,py:percent
+#     formats: ipynb,py_mirrors//py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
@@ -15,7 +15,7 @@
 # Tre prismodeller for ren egen-skadepremie (forventet skadekostnad per eksponeringsår)
 # sammenlignes på ett ubrukt år: **Tweedie-GLM**, **toleddet GLM** (frekvens × severity)
 # og **CatBoost**. Modellene er spesifisert og refittet på 2022–2023 i egne notebooks
-# (`tweedie`, `glm_pricing_models`, `glm_pricing_severity`, `ml_pricing`) og lagret i
+# (`02_frekvens`, `03_severity`, `04_tweedie`, `05_catboost`) og lagret i
 # `models/`. Ingen modell trenes eller justeres her.
 #
 # 2024 er ikke brukt til modellvalg, seleksjon eller tuning. Testlåsen er aktiv:

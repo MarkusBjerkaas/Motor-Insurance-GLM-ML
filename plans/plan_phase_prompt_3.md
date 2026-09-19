@@ -28,10 +28,10 @@ Unngå LaTeX i samtalen; notebookens senere dokumentasjon følger prosjektreglen
 
 Prosjektet er en porteføljebenchmark for motorforsikringsprising på spanske data.
 
-- `glm_pricing_models.py`: modellspesifikasjoner, CV, frekvensresultater og
+- `02_frekvens.py`: modellspesifikasjoner, CV, frekvensresultater og
   beslutningsregister.
-- `glm_pricing_models.ipynb`: lagrede resultattabeller og figurer.
-- `analysis.py` / `analysis.ipynb`: deskriptiv analyse.
+- `02_frekvens.ipynb`: lagrede resultattabeller og figurer.
+- `01_descriptiv.py` / `01_descriptiv.ipynb`: deskriptiv analyse.
 - `current.md`: brukerens foreløpige vurdering av severity-prediktorer.
 - `plans/glm_pricing_models_plan.md`: eksisterende plan og historikk.
 - `src/model_data.py`: felles datagrunnlag og avgrensninger.

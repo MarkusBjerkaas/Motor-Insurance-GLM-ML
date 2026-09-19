@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-# Variabler som bevisst ikke er kandidater, med begrunnelse (analysis.py §17 og planene).
+# Variabler som bevisst ikke er kandidater, med begrunnelse (01_descriptiv §17 og planene).
 EXCLUDED_VARIABLES = {
     "bonus_score": "tidspunkt for fastsettelse uavklart (lekkasjerisiko)",
     "policy_status": "ukjent om status er kjent ved periodestart",

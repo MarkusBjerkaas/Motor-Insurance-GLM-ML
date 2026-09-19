@@ -3,7 +3,7 @@
 ## Status
 
 Frekvensfasen er forenklet 2026-09-18 og fikk 2026-09-19 den felles
-seleksjonsalgoritmen fra `tweedie.py` (forover-/bakoverseleksjon med
+seleksjonsalgoritmen fra `04_tweedie.py` (forover-/bakoverseleksjon med
 firleddsregel). Arbeidet fokuserer bare på en presentasjonsvennlig Poisson-GLM
 for egen skade. Severity, ren premie,
 fordelingsutfordrere og sensitiviteter tas opp først ved en senere,
@@ -27,7 +27,7 @@ $$
 ## Spesifikasjoner og valg
 
 Fem `GroupKFold`-folder på `insured_id` (seed 100) brukes for alle sammenligninger.
-Seleksjonsalgoritmen og notebook-strukturen er identiske med `tweedie.py`
+Seleksjonsalgoritmen og notebook-strukturen er identiske med `04_tweedie.py`
 (`tweedie_plan.md`, T-09 og T-10); bare responsen (Poisson, $p=1$, vekt
 `total_exposure`) og kandidatregisteret er frekvensspesifikke.
 
@@ -104,5 +104,5 @@ en senere, separat test på 2024.
 | 2026-09-19 | Faserevisjon før Tweedie-implementering: metoden er uendret. Foldene bygges nå med den felles `build_group_folds` (samme `GroupKFold`, seed 100 og gruppekolonne) og sanity-sjekker ligger i `src_asserts/`. Frekvensnotebooken er kjørt på nytt; output er identisk med før (bare tidsstempel er forskjellig). |
 | 2026-09-19 | CatBoost-residualdiagnostikk lagt til som §7 i frekvensnotebooken (se `plans/glm_catboost_residual_diagnostics_plan.md`). Ren diagnose, ikke seleksjonsport: ingen stabil gevinst over GLM-en (pooled OOF-deviance 1,1217 mot 1,1219/1,1227), så F5 og beslutningsregisteret er uendret. Seksjonene etter er renummerert til 8–11. |
 | 2026-09-19 | Tweedie-notebooken har fått en forover-/bakover-seleksjon som tillater flere tillegg, interaksjoner og ablasjon (se `tweedie_plan.md`, T-09). Metoden i denne planen (frekvens) er uendret. Portering av algoritmen hit er planlagt først etter at Tweedie fungerer og etter egen godkjenning; planen skrives da om. `add_seat_category` er flyttet til `src_core_glm/model_data.py` og delt med severity. |
-| 2026-09-19 | Portering av seleksjonsalgoritmen fra `tweedie.py` (siste steg). Ny kjerne (`log_vehicle_value`, `circulation_area`, `payment_frequency`, `driver_age`), `payment_frequency` fjernet fra tilleggene, samme splines, geografitest, tillegg og interaksjoner som Tweedie. Firleddsregel med `SE_MULTIPLIER = 1.0`, parallell evaluering, forover-seleksjonstabell med SE, topp-3 og `summary()`. Modellagnostisk kode ligger i `src_core_glm/model_selection.py` og `selection_report.py`. Valgt modell: K0 + alder (spline df 4) + `business_type`. Diagnostikk (§5–§9) er beholdt og koblet til den nye sluttmodellen; gamle «Tolkning»-avsnitt er fjernet fordi tallene er endret. Metoden i planen er skrevet om (dette er den vesentlige endringen); 2024 er urørt. |
+| 2026-09-19 | Portering av seleksjonsalgoritmen fra `04_tweedie.py` (siste steg). Ny kjerne (`log_vehicle_value`, `circulation_area`, `payment_frequency`, `driver_age`), `payment_frequency` fjernet fra tilleggene, samme splines, geografitest, tillegg og interaksjoner som Tweedie. Firleddsregel med `SE_MULTIPLIER = 1.0`, parallell evaluering, forover-seleksjonstabell med SE, topp-3 og `summary()`. Modellagnostisk kode ligger i `src_core_glm/model_selection.py` og `selection_report.py`. Valgt modell: K0 + alder (spline df 4) + `business_type`. Diagnostikk (§5–§9) er beholdt og koblet til den nye sluttmodellen; gamle «Tolkning»-avsnitt er fjernet fordi tallene er endret. Metoden i planen er skrevet om (dette er den vesentlige endringen); 2024 er urørt. |
 | 2026-09-19 | Klargjøring før 2024-testen (metoden i planen er uendret). Hver modellnotebook refitter nå sin endelige modell på hele 2022–2023 og lagrer den i `models/` via `src_model_comparison/locked_models.py`, med kontroll mot notebookens egen `predict`. Variabelsjekk (`variable_coverage.py`) sikrer at alle ikke-utelatte variabler er testet i hver modell. Lekkasjekontroll fant at `year` er en låst kategorisk term som 2024 ikke kan skåres på: alle modeller skåres derfor med 2023-nivået (`SCORE_YEAR`), og numeriske prediktorer klippes til treningsområdet. Årsdrift blir liggende i porteføljebalansen. `clean_motor_data` feilet uten 2022-rader (rettet), og skåringskjeden er tørrkjørt på 2023. Ingen 2024-data er lest. |

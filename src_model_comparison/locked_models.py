@@ -1,7 +1,7 @@
 """Låste modeller: refit på hele utviklingssettet, lagring og prediksjon.
 
 Hver modellnotebook fitter sin endelige modell på alle utviklingsdata
-(2022–2023) og lagrer den under ``models/``. ``model_results.py`` laster dem og
+(2022–2023) og lagrer den under ``models/``. ``model_results`` laster dem og
 predikerer teståret én gang. Modulen leser aldri data selv.
 
 Årseffekten: ``year`` er en låst, kategorisk term, og 2024 finnes ikke i
@@ -139,5 +139,5 @@ def lock_catboost(
 
 
 def load_locked_model(name, directory=LOCKED_MODEL_DIR):
-    """Last en lagret modell; brukes bare av ``model_results.py``."""
+    """Last en lagret modell; brukes bare av ``model_results``."""
     return joblib.load(Path(directory) / f"{name}.joblib")
