@@ -74,11 +74,13 @@ APPROVAL_CODE = None
 # **CatBoost.** Gradientboostede symmetriske trær med log-link og Tweedie-tap:
 #
 # $$
-# \widehat\mu(x)=\exp\Big\{\sum_{m=1}^{300}\eta\,t_m(x)\Big\},\qquad \eta=0.03,\ \text{dybde }4.
+# \widehat\mu(x)=\exp\Big\{\sum_{m=1}^{M}\eta\,t_m(x)\Big\},
 # $$
 #
-# Tweedie-GLM og CatBoost bruker $p=1.744$. Den fullstendige spesifikasjonen (leddene,
-# referansenivåene og antall parametere) står i hver modellnotebook.
+# med $M$ trær av dybde $d$, læringsrate $\eta$ og $L_2$-regularisering $\lambda$ valgt
+# ved gruppe-CV (verdiene står i `05_catboost`). Tweedie-GLM og CatBoost bruker
+# $p=1.744$. Den fullstendige spesifikasjonen (leddene, referansenivåene og antall
+# parametere) står i hver modellnotebook.
 
 # %%
 # Lås opp de lagrede modellene. Brand-poolingen læres kun fra 2022–2023.
@@ -137,9 +139,9 @@ if RUN_2024_EVALUATION:
 # - **Optimistiske utviklingsscorer.** Variabelutvalg, spesifikasjon og hyperparametere er
 #   valgt på samme fem CV-folder, og $p$ er estimert på hele utviklingssettet.
 # - **CatBoost er skjev i nivå.** Modellen undervurderer porteføljen allerede på
-#   utviklingsdata (−5,4 % balanse på 2023-radene i en tørrkjøring uten 2024). Den lave
-#   læringsraten og $L_2$-regulariseringen gir ikke full nivåkalibrering; balansen på
-#   teståret bør leses med det i minne.
+#   utviklingsdata (−3,6 % balanse på 2023-radene i en tørrkjøring uten 2024). Log-linken og
+#   regulariseringen gir ikke full nivåkalibrering; balansen på teståret bør leses med det
+#   i minne.
 # - **Lav forklart varians.** Skadekostnad per poliseår har få og skjeve skader; alle
 #   modeller forklarer bare en liten andel av variasjonen (D² ≈ 0,02 for CatBoost).
 #

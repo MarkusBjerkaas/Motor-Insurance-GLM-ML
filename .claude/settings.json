@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "set -eu; for nb in 01_descriptiv 02_frekvens 03_severity 04_tweedie 05_catboost model_results; do p=/workspaces/MotorForsikring; if [ -f $p/$nb.ipynb ] && [ $p/$nb.ipynb -nt $p/py_mirrors/$nb.py ]; then uv run --project /workspaces/MotorForsikring jupytext --to py:percent --output $p/py_mirrors/$nb.py $p/$nb.ipynb; fi; done",
+            "command": "set -eu; for nb in 01_descriptiv 02_frekvens 03_severity 04_tweedie 05_catboost model_results; do p=/workspaces/MotorForsikring; if [ -f $p/$nb.ipynb ] && [ $p/$nb.ipynb -nt $p/py_mirrors/$nb.py ]; then uv run --project /workspaces/MotorForsikring jupytext --sync $p/$nb.ipynb; fi; done",
             "statusMessage": "Syncing notebook .py files from .ipynb..."
           }
         ]

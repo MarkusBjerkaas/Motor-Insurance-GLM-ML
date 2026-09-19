@@ -156,6 +156,31 @@ def build_catboost_result_table(result):
     )
 
 
+def build_final_model_table(result):
+    """Hent hyperparameterne fra den refittede modellen og vis om de ligger på gridkanten."""
+    model = result["best_estimator"]
+    fitted = model.get_all_params()
+    values = {
+        "depth": fitted["depth"],
+        "learning_rate": fitted["learning_rate"],
+        "iterations": model.tree_count_,
+        "l2_leaf_reg": fitted["l2_leaf_reg"],
+    }
+    rows = []
+    for name, value in values.items():
+        grid = sorted(result["param_grid"][name])
+        rows.append(
+            {
+                "parameter": name,
+                "verdi": value,
+                "grid_min": grid[0],
+                "grid_maks": grid[-1],
+                "på_kant": value in (grid[0], grid[-1]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _weighted_mean(values, weights):
     return np.average(values, weights=weights)
 

@@ -27,6 +27,7 @@ from IPython.display import display
 from src_core_glm.model_data import build_development_frames
 from src_ml.catboost_pricing import (
     build_catboost_result_table,
+    build_final_model_table,
     fit_catboost_grid,
     plot_catboost_diagnostics,
     prepare_catboost_features,
@@ -66,11 +67,15 @@ CATEGORICAL_FEATURES = [
     "vehicle_brand_pooled",
 ]
 
+# Bare parametrene som styrer kompleksitet og regularisering tunes. Læringsrate
+# og antall trær veier mot hverandre, så begge varieres. Rutenettet er bredt
+# nedover fordi et tidligere grid (depth 4–6, lr 0.03–0.07, 300–600 trær,
+# l2 3–10) valgte laveste verdi i alle dimensjoner.
 PARAM_GRID = {
-    "depth": [4, 6],
-    "learning_rate": [0.03, 0.07],
-    "iterations": [300, 600],
-    "l2_leaf_reg": [3.0, 10.0],
+    "depth": [2, 3, 4, 6],
+    "learning_rate": [0.01, 0.02, 0.03, 0.05],
+    "iterations": [150, 300, 600],
+    "l2_leaf_reg": [1.0, 3.0, 10.0, 30.0],
 }
 
 # %% [markdown]
@@ -101,7 +106,8 @@ groups = model_frame["insured_id"]
 # der $S_i$ er incurred egen-skadekostnad og $e_i$ er eksponering. CatBoost
 # estimerer forventet ren premie $\widehat\mu_i = f_\theta(x_i)$ ved å minimere
 # eksponeringsvektet Tweedie-deviance med låst $p$. Hyperparameterne velges av
-# et lite rutenett (16 kombinasjoner) ved å minimere
+# et rutenett over `depth`, `learning_rate`, `iterations` og `l2_leaf_reg`
+# (192 kombinasjoner) ved å minimere
 #
 # $$
 # D_p = \operatorname{mean\_tweedie\_deviance}
@@ -128,11 +134,10 @@ result = fit_catboost_grid(
 # %% [markdown]
 # ## 3. Resultat og diagnostikk
 #
-# Rutenettet valgte `depth` 4, `learning_rate` 0.03, `iterations` 300 og
-# `l2_leaf_reg` 3.0. `grid_mean_deviance` er scoren som valgte disse.
-# `pooled_oof_deviance` er beregnet fra de samme foldenes OOF-prediksjoner og
-# er derfor optimistisk. Nullmodellen er treningsfoldens eksponeringsvektede
-# gjennomsnitt.
+# Tabellen viser hyperparameterne rutenettet valgte. `grid_mean_deviance` er
+# scoren som valgte dem. `pooled_oof_deviance` er beregnet fra de samme foldenes
+# OOF-prediksjoner og er derfor optimistisk. Nullmodellen er treningsfoldens
+# eksponeringsvektede gjennomsnitt.
 
 # %%
 result_table = build_catboost_result_table(result)
@@ -152,22 +157,16 @@ figure = plot_catboost_diagnostics(result)
 # F_M(x) = \sum_{m=1}^{M} \eta\, t_m(x),
 # $$
 #
-# der $t_m$ er symmetriske (oblivious) beslutningstrær av dybde $d = 4$ (16
-# blader per tre), læringsraten er $\eta = 0.03$, antall trær er $M = 300$ og
-# bladverdiene har $L_2$-regularisering $\lambda = 3.0$. Trærne bygges
-# sekvensielt for å minimere $D_p$ fra §2 med eksponeringsvekt $w=e$ og låst
-# $p = 1.744$. Totalt gir det $300 \cdot 2^4 = 4800$ bladverdier.
+# der $t_m$ er symmetriske (oblivious) beslutningstrær av dybde $d$ (med $2^d$
+# blader per tre), $\eta$ er læringsraten, $M$ er antall trær og bladverdiene
+# har $L_2$-regularisering $\lambda$. Trærne bygges sekvensielt for å minimere
+# $D_p$ fra §2 med eksponeringsvekt $w=e$ og låst $p = 1.744$. Verdiene til
+# $d$, $\eta$, $M$ og $\lambda$ leses fra den refittede modellen under, og
+# `på_kant` viser om noen av dem ligger på kanten av rutenettet.
 
 # %%
-# Sikrer at LaTeX-teksten over stemmer med den valgte modellen (kan fjernes).
-assert result["search"].best_params_ == {
-    "depth": 4,
-    "iterations": 300,
-    "l2_leaf_reg": 3.0,
-    "learning_rate": 0.03,
-}
-assert result["best_estimator"].tree_count_ == 300
-assert TWEEDIE_POWER == 1.744
+final_model_table = build_final_model_table(result)
+display(final_model_table)
 
 # %% [markdown]
 # ## 5. Variabelsjekk og låst modell
@@ -193,16 +192,18 @@ display(
 #
 # - **Optimistisk utviklingsscore.** Samme fem folder velger hyperparameterne
 #   og scorer dem; `pooled_oof_deviance` er derfor ikke et uavhengig estimat.
-# - **Lite rutenett.** Bare 16 kombinasjoner er testet, og alle valgte verdier
-#   ligger i den lave enden av rutenettet, så mer forsiktige oppsett er ikke
-#   utforsket. CatBoost har ikke tidlig stopp eller egen valideringsdel utover
-#   CV.
-# - **Lav forklart deviance.** $D^2 = 0.0239$ mot nullmodellen; skadekostnad er
+# - **Begrenset rutenett.** 192 kombinasjoner av fire hyperparametere er testet. Flere av de
+#   valgte verdiene ligger på kanten av rutenettet (`på_kant` i §4): optimum kan
+#   ligge utenfor, mot enda enklere trær og flere iterasjoner. CatBoost har ikke
+#   tidlig stopp eller egen valideringsdel utover CV.
+# - **Lav forklart deviance.** `oof_d2` i §3 er lav mot nullmodellen; skadekostnad er
 #   svært støyende. $p$ er låst fra Tweedie-GLM-løpet og ikke tunet her.
 # - **Feature importance er deskriptiv**, ikke kausal, og sier ikke noe om
 #   retning eller størrelse på effekten.
 # - **`year` er en låst kategorisk term**, og 2024 finnes ikke i treningsdata.
 #   2024 skåres derfor med 2023-nivået: ingen trend-ekstrapolering, og
 #   årsdrift blir liggende i porteføljebalansen.
-# - **Numeriske prediktorer klippes til treningsområdet** ved skåring; trærne
-#   er flate utenfor det.
+# - **Numeriske prediktorer klippes til treningsområdet** ved skåring. Trærne er
+#   flate utenfor det, og GLM-ene klippes tilsvarende (se
+#   `src_model_comparison/locked_models.py`) slik at sammenligningen blir
+#   rettferdig.
