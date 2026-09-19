@@ -330,7 +330,9 @@ def check_fold_fit(spec, result, train, val, train_prediction, val_prediction):
     return problems, rank
 
 
-def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
+def cross_validate_glm(
+    spec, data, folds, prediction_data=None, fold_hook=None, fit_kwargs=None
+):
     """Estimer og scor én ferdig spesifikasjon out-of-fold.
 
     I hver fold: manglende-reglene læres på treningsdelen og brukes på begge
@@ -345,11 +347,18 @@ def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
     spec : dict
         Spesifikasjonen fra ``glm_spec``.
     data : pandas.DataFrame
-        Hele train-poolen (2022–2023) spesifikasjonens datasett er hentet
-        fra. Foldene indekserer inn i denne.
+        Populasjonen modellen fittes og scores på (f.eks. severity-utvalget).
+        Foldene kan indeksere hele modellpopulasjonen; de skjæres mot
+        ``data.index``.
     folds : list of dict
-        Foldene fra notebooken, hver med ``fold`` (navn), ``train_index`` og
-        ``val_index``.
+        Foldene fra ``build_group_folds``, hver med ``fold`` (navn),
+        ``train_index`` og ``val_index``.
+    prediction_data : pandas.DataFrame or None, optional
+        Populasjonen som skal få OOF-prediksjoner, og som må inneholde alle
+        rader i ``data`` (typisk hele modellrammen når ``data`` er en
+        delmengde). Manglende-regler og avledede kolonner læres fortsatt bare
+        på treningsdelen av ``data``. ``None`` betyr ``data``, altså uendret
+        oppførsel.
     fold_hook : callable or None, optional
         ``fold_hook(spec, fold_name, result, train_design, val_design,
         derived_state)``, kalt for hver gyldig fold. Kan returnere en dict
@@ -363,8 +372,9 @@ def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
     Returns
     -------
     dict
-        ``oof`` (pandas.Series med OOF-prediksjoner, NaN for folder som ikke
-        passerte kontrollene), ``scores`` (DataFrame, én rad per fold),
+        ``oof`` (pandas.Series over ``data`` med OOF-prediksjoner, NaN for
+        folder som ikke passerte kontrollene), ``prediction_oof`` (samme, men
+        over ``prediction_data``), ``scores`` (scorepopulasjonen) (DataFrame, én rad per fold),
         ``params`` og ``param_se`` (DataFrame, én kolonne per fold, brukt til
         stabilitetssjekk), ``support`` (kategoristøtte per fold og nivå),
         ``valid`` (bool, ``True`` bare når alle folder passerte kontrollene)
@@ -372,7 +382,12 @@ def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
         nøkler fra ``fold_hook``.
     """
     response, weight = spec["y"], spec["weight"]
+    if prediction_data is None:
+        prediction_data = data
+    elif not data.index.isin(prediction_data.index).all():
+        raise ValueError("prediction_data må inneholde alle rader i data.")
     oof_predictions = pd.Series(np.nan, index=data.index, name=spec["name"])
+    prediction_oof = pd.Series(np.nan, index=prediction_data.index, name=spec["name"])
     fold_scores, fold_params, fold_se, fold_support, errors = [], [], [], [], []
     extras = {}
 
@@ -384,24 +399,35 @@ def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
     for fold in folds:
         train = data.loc[data.index.intersection(fold["train_index"])]
         val = data.loc[data.index.intersection(fold["val_index"])]
+        # Hele valideringsfolden som skal predikeres (lik val uten prediction_data)
+        apply = prediction_data.loc[
+            prediction_data.index.intersection(fold["val_index"])
+        ]
         try:
-            (train_design, val_design), derived_state = prepare_fold_frames(
-                spec, train, [train, val], prepare_design_frame
+            (train_design, val_design, apply_design), derived_state = (
+                prepare_fold_frames(
+                    spec, train, [train, val, apply], prepare_design_frame
+                )
             )
             result = fit_glm(
                 spec, train_design, check_convergence=False, fit_kwargs=fit_kwargs
             )
             train_prediction = result.predict(train_design)
             val_prediction = result.predict(val_design)
+            apply_prediction = result.predict(apply_design)
         except (ValueError, np.linalg.LinAlgError, PatsyError) as error:
             errors.append(f"{fold['fold']}: {error}")
             continue
         problems, rank = check_fold_fit(
             spec, result, train_design, val_design, train_prediction, val_prediction
         )
+        apply_values = np.asarray(apply_prediction, dtype=float)
+        if not (np.isfinite(apply_values).all() and (apply_values > 0).all()):
+            problems.append("ikke-endelige eller ikke-positive prediksjoner (full validering)")
         errors.extend(f"{fold['fold']}: {problem}" for problem in problems)
         if not problems:  # OOF bare fra folder som passerer kontrollene
             oof_predictions.loc[val.index] = val_prediction
+            prediction_oof.loc[apply.index] = apply_prediction
 
         # Pearson-dispersjon på treningsdelen (antallsskala for frekvens)
         pearson_phi = result.pearson_chi2 / result.df_resid
@@ -462,6 +488,7 @@ def cross_validate_glm(spec, data, folds, fold_hook=None, fit_kwargs=None):
         scores["val_d2"] = 1 - scores["val_deviance"] / scores["val_null_deviance"]
     return {
         "oof": oof_predictions,
+        "prediction_oof": prediction_oof,
         "scores": scores,
         "params": pd.concat(fold_params, axis=1) if fold_params else pd.DataFrame(),
         "param_se": pd.concat(fold_se, axis=1) if fold_se else pd.DataFrame(),

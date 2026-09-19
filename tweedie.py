@@ -12,54 +12,43 @@
 # %% [markdown]
 # # Tweedie-modell for ren egen-skadepremie
 #
-# Denne notebooken setter opp en samlet Tweedie-GLM for forventet årlig
-# egen-skadekostnad. Den bruker bare utviklingsårene 2022–2023. Prediktorer og
-# CV-struktur holdes låst mens Tweedie-kraften `p` sammenlignes.
+# Tweedie-GLM er utfordreren til den todelte modellen
+# $\widehat{\text{pure premium}} = \widehat{\text{frekvens}} \times \widehat{\text{severity}}$.
+# Notebooken bruker bare utviklingsårene 2022–2023; 2024 leses aldri.
+#
+# **Status:** infrastrukturen (datagrunnlag, felles folder, spesifikasjon og
+# Pearson-estimering av $p$) er klar og testet. Bred ankermodell og
+# kandidatregister er ikke låst, så ingen Tweedie-modell fittes ennå.
+# Beslutningene ligger i `tweedie_plan.md` (register T-01–T-08).
 
 # %%
-import numpy as np
-import pandas as pd
 import statsmodels.api as sm
-from sklearn.model_selection import GroupKFold
+from IPython.display import display
 
-from src_core_glm.glm_core import (
-    cross_validate_glm,
-    fit_glm,
-    glm_spec,
-    prepare_design_frame,
-)
-from src_core_glm.model_data import (
-    TRAIN_YEARS,
-    assert_development_years,
-    build_development_frames,
-    to_model_frame,
-)
-from src_core_glm.model_selection import run_backward_ablation, select_candidate_stage
+from src_asserts.common_glm_asserts import assert_valid_folds
+from src_asserts.tweedie_asserts import assert_tweedie_spec
+from src_core_glm.glm_core import glm_spec
+from src_core_glm.model_data import build_development_frames
+from src_core_glm.validation import build_group_folds
+from src_tweedie.tweedie_data import build_tweedie_frame, summarize_tweedie_frame
 
 SEED = 100
 N_FOLDS = 5
-FIT_SETTINGS = {"maxiter": 200, "tol": 1e-8}
-POWER_GRID = (1.1, 1.3, 1.5, 1.7, 1.9)
 
 # %% [markdown]
 # ## 1. Datagrunnlag
 #
-# For poliseår $i$ modelleres samlet kostnad per eksponeringsår som
-#
-# $$
-# Y_i/e_i \sim \operatorname{Tweedie}(\mu_i,\phi e_i^{1-p}),
-# \qquad \log(\mu_i)=\beta_0+\sum_j\beta_jx_{ij},
-# $$
-#
-# med `total_exposure` som frekvens-/eksponeringsvekt. For $1<p<2$ har
-# fordelingen både masse i null og en kontinuerlig positiv del.
+# La $S_i$ være `property_incurred`, $e_i$ være `total_exposure` og
+# $R_i = S_i/e_i$ observert pure premium per eksponeringsår. Alle poliseår er
+# gyldige observasjoner, også skadefrie ($R_i = 0$), og flere skader på samme
+# poliseår er tillatt fordi $S_i$ er aggregert årlig skadekostnad.
 
 # %%
 frames = build_development_frames()
 development = frames["development"]
-assert_development_years(development)
 
-PREDICTORS = [
+# Kolonner som er tilgjengelige for kandidatregisteret. Dette er ikke et modellvalg.
+AVAILABLE_COLUMNS = [
     "policy_type",
     "year",
     "driver_age",
@@ -73,173 +62,105 @@ PREDICTORS = [
     "vehicle_brand_pooled",
     "seats",
 ]
-model_columns = [
-    "insured_id",
-    "total_exposure",
-    "property_incurred",
-    *PREDICTORS,
-]
-model_frame = to_model_frame(development, model_columns)
-model_frame["pure_premium"] = (
-    model_frame["property_incurred"] / model_frame["total_exposure"]
+model_frame = build_tweedie_frame(development, AVAILABLE_COLUMNS)
+display(summarize_tweedie_frame(model_frame).round(3))
+
+# %% [markdown]
+# ## 2. Validering
+#
+# Fem gruppefolder på `insured_id` bygges på hele modellpopulasjonen. Samme
+# indeks, gruppekolonne og seed gir identiske folder som i frekvens- og
+# severity-notebookene, slik at OOF-prediksjonene kan sammenlignes rad for rad.
+
+# %%
+cv_folds = build_group_folds(
+    model_frame,
+    group_column="insured_id",
+    n_splits=N_FOLDS,
+    shuffle=True,
+    random_state=SEED,
 )
+assert_valid_folds(cv_folds, model_frame)  # sanity-sjekk, kan fjernes
 
 # %% [markdown]
-# ## 2. Gruppebasert CV
+# ## 3. Modellspesifikasjon
 #
-# Samme `insured_id` ligger ikke i både trening og validering. Dette er samme
-# foldstruktur som i de øvrige GLM-fasene; 2024 inngår ikke i rammen.
+# $$
+# R_i = \frac{S_i}{e_i} \sim \operatorname{Tweedie}\!\left(\mu_i, \frac{\phi}{e_i}, p\right),
+# \qquad 1<p<2,
+# $$
+#
+# $$
+# \operatorname{E}[R_i \mid x_i] = \mu_i,
+# \qquad
+# \operatorname{Var}(R_i \mid x_i) = \frac{\phi}{e_i}\,\mu_i^{p},
+# \qquad
+# \log \mu_i = \beta_0 + \sum_j \beta_j x_{ij}.
+# $$
+#
+# For $1<p<2$ er $R_i$ en sammensatt Poisson–Gamma-variabel: masse i null
+# (skadefrie år) og en kontinuerlig positiv del. Eksponeringen $e_i$ er
+# `var_weights`, uten offset: $R_i$ er allerede en rate, og et år med høy
+# eksponering er en mer presis observasjon av samme $\mu_i$.
+#
+# Power $p$ estimeres med iterativ Pearson-estimering
+# (`src_tweedie/tweedie_power.py`) på den låste ankermodellen og låses *før*
+# variabelseleksjonen. Deviance med ulike $p$ er ikke sammenlignbar, så $p$
+# velges ikke ved CV.
+
 
 # %%
-group_kfold = GroupKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
-cv_folds = [
-    {
-        "fold": f"gruppe_{number + 1}",
-        "train_index": model_frame.index[train_positions],
-        "val_index": model_frame.index[val_positions],
-    }
-    for number, (train_positions, val_positions) in enumerate(
-        group_kfold.split(model_frame, groups=model_frame["insured_id"])
-    )
-]
+def build_tweedie_specification(
+    name, power, predictors, spline_terms=(), interaction_terms=()
+):
+    """Bygg én Tweedie-spesifikasjon (log-link, eksponeringsvekt, ingen offset).
 
-# %% [markdown]
-# ## 3. Tweedie-spesifikasjon
-#
-# `glm_spec` og `cross_validate_glm` er generiske: eneste modellparameter som
-# endres her er `power`. Formelen og vekten er identiske for alle kandidater.
-
-# %%
-def build_tweedie_specification(power, predictors=PREDICTORS, name=None):
-    """Bygg én samlet Tweedie-GLM for en forhåndsdefinert kraftparameter."""
-    family = sm.families.Tweedie(
-        var_power=power,
-        link=sm.families.links.Log(),
-    )
+    ``predictors`` er råkolonner, ``spline_terms`` er ``(kolonne, df)`` og
+    ``interaction_terms`` er ferdige patsy-ledd med råkolonnene i ``predictors``.
+    """
+    spline_map = dict(spline_terms)
+    terms = [
+        f"cr({column}, df={spline_map[column]}, constraints='center')"
+        if column in spline_map
+        else column
+        for column in predictors
+    ]
+    terms += list(interaction_terms)
+    family = sm.families.Tweedie(var_power=power, link=sm.families.links.Log())
     return glm_spec(
-        name=name or f"tweedie_p_{power:.1f}",
-        x=predictors,
-        y="pure_premium",
-        data=model_frame,
-        family=family,
-        weight="total_exposure",
-        power=power,
+        name,
+        terms,
+        "pure_premium",
+        model_frame,
+        family,
+        "total_exposure",
+        power,
+        required_columns=predictors,
     )
 
 
-tweedie_specs = {
-    power: build_tweedie_specification(power) for power in POWER_GRID
-}
+# Nøytral kontroll av byggeren (bare intercept): ikke en kandidat.
+assert_tweedie_spec(build_tweedie_specification("intercept", 1.5, []))  # kan fjernes
 
 # %% [markdown]
-# ## 4. CV-oppsett for `p`
+# ## 4. Sammenligning og valg
 #
-# Hver kandidat får samme fold, preprocessing og foldkontroller. Valg av `p`
-# skal senere baseres på pooled OOF-Tweedie-deviance, ikke på treningsscore.
+# Når bred ankermodell og kandidatregister er låst, følger Tweedie samme
+# hovedstruktur som de andre GLM-ene: kjerne, alternative funksjonsformer,
+# geografi og kjøretøyopplysninger, forhåndsdefinerte tillegg, eventuelle
+# interaksjoner og eventuell ablasjon. Med låst $p$ brukes treleddsregelen:
+# lavere pooled OOF-deviance enn foreldremodellen, bedre i minst fire av fem
+# folder og gyldig fit i alle folder.
+#
+# Senere benchmark mot den todelte modellen krever identisk indeks, full
+# dekning og positive prediksjoner for begge, samme `pure_premium`,
+# eksponeringsvekt og én felles, forhåndslåst score-power:
+# `two_part_oof = frequency_oof * severity_prediction_oof` og
+# `tweedie_oof = tweedie_result["prediction_oof"]`
+# (kontrollen `assert_comparable_oof` i `src_asserts/common_glm_asserts.py`).
 
 # %%
-cv_results = {
-    power: cross_validate_glm(
-        specification,
-        model_frame,
-        cv_folds,
-        fit_kwargs=FIT_SETTINGS,
-    )
-    for power, specification in tweedie_specs.items()
-}
-
-
-def summarize_power_cv(cv_results):
-    """Samle foldscore til én sammenlignbar, eksponeringsvektet oversikt."""
-    rows = []
-    for power, result in cv_results.items():
-        scores = result["scores"]
-        rows.append(
-            {
-                "power": power,
-                "pooled_oof_deviance": np.average(
-                    scores["val_deviance"], weights=scores["val_weight"]
-                ),
-                "mean_fold_deviance": scores["val_deviance"].mean(),
-                "valid": result["valid"],
-            }
-        )
-    return pd.DataFrame(rows).sort_values("pooled_oof_deviance")
-
-
-power_cv_summary = summarize_power_cv(cv_results)
-
-# %% [markdown]
-# ## 5. Finalist
-#
-# Denne cellen velger foreløpig laveste pooled OOF-deviance. Eventuell
-# vurdering av flat scorekurve og praktisk avrunding dokumenteres før sluttfit.
-
-# %%
-selected_power = power_cv_summary.iloc[0]["power"]
-selected_specification = tweedie_specs[selected_power]
-
-# %% [markdown]
-# ## 6. Variabelseleksjon med valgt `p`
-#
-# Etter at `p` er valgt, holdes den fast. Deretter brukes den eksisterende
-# treleddsregelen for kandidatvariabler: lavere pooled OOF-deviance, forbedring
-# i minst fire av fem folder og gyldig fit i alle folder. Dette skiller
-# hyperparameter-valget fra variabelseleksjonen.
-
-# %%
-selected_power = float(selected_power)
-selection_specifications = {
-    "tweedie_full": build_tweedie_specification(
-        selected_power, name="tweedie_full"
-    )
-}
-selection_results = {
-    "tweedie_full": cross_validate_glm(
-        selection_specifications["tweedie_full"],
-        model_frame,
-        cv_folds,
-        fit_kwargs=FIT_SETTINGS,
-    )
-}
-
-
-def select_tweedie_stage(parent_name, candidate_names):
-    """Bruk variabelseleksjonsregelen med valgt Tweedie-kraft."""
-    return select_candidate_stage(
-        selection_results,
-        parent_name,
-        candidate_names,
-        model_frame["pure_premium"],
-        model_frame["total_exposure"],
-        power=selected_power,
-    )
-
-
-def build_tweedie_removal(parent_name, column):
-    """Bygg en kandidat som fjerner én råprediktor fra foreldreformelen."""
-    parent_predictors = selection_specifications[parent_name]["x"]
-    predictors = [predictor for predictor in parent_predictors if predictor != column]
-    return build_tweedie_specification(
-        selected_power,
-        predictors=predictors,
-        name=f"{parent_name}_uten_{column}",
-    )
-
-
-selected_variable_model, removed_variables, variable_selection_tables = run_backward_ablation(
-    start_name="tweedie_full",
-    specifications=selection_specifications,
-    cv_results=selection_results,
-    protected_predictors=("policy_type", "year"),
-    build_candidate=build_tweedie_removal,
-    evaluate_candidate=lambda specification: cross_validate_glm(
-        specification,
-        model_frame,
-        cv_folds,
-        fit_kwargs=FIT_SETTINGS,
-    ),
-    select_stage=select_tweedie_stage,
+print(
+    "Kandidatregister og bred ankermodell er ikke låst. "
+    "Ingen Tweedie-kandidater fittes eller velges i denne versjonen."
 )
-
-# Sluttfit kjøres først når både `p` og variabelseleksjonen er gjennomgått.

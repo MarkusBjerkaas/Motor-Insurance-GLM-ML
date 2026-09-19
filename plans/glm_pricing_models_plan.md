@@ -83,3 +83,5 @@ en senere, separat test på 2024.
 | Dato | Endring |
 |---|---|
 | 2026-09-18 | Fase 1 skrevet om til en kort CV-stige: kjerne, splines, kjøretøyopplysninger, én direkte spesifisert produkt × alder-interaksjon og iterativ ablasjon. Tids-CV, individuelle seleksjonsregler og diagnoseplott er fjernet. Avsluttes med en beslutningstabell for de tre nærmeste modellene. |
+| 2026-09-19 | Faserevisjon før Tweedie-implementering: metoden er uendret. Foldene bygges nå med den felles `build_group_folds` (samme `GroupKFold`, seed 100 og gruppekolonne) og sanity-sjekker ligger i `src_asserts/`. Frekvensnotebooken er kjørt på nytt; output er identisk med før (bare tidsstempel er forskjellig). |
+

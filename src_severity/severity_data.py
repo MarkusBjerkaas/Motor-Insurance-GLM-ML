@@ -21,8 +21,10 @@ er kopiert 1:1 derfra slik at severity bygger på nøyaktig samme datagrunnlag.
   ``model_frame``s indeks (ikke resatt), slik at radene kan kobles entydig.
 """
 
+import numpy as np
 import pandas as pd
 
+from src_asserts.severity_asserts import assert_severity_frame
 from src_core_glm.model_data import assert_development_years, to_model_frame
 from src_descriptives.own_damage_descriptives import CURRENCY_ZERO_TOLERANCE
 
@@ -59,6 +61,13 @@ def build_severity_inputs(development):
     assert_development_years(development)
 
     model_frame = to_model_frame(development, ID_COLUMNS + PREDICTORS + OUTCOME_COLUMNS)
+    # Severity-prediktor (S-plan): seter som <5, =5, >5. På model_frame slik at
+    # også skadefrie poliseår kan predikeres.
+    model_frame["seat_category"] = np.select(
+        [model_frame["seats"].lt(5), model_frame["seats"].eq(5)],
+        ["<5", "=5"],
+        default=">5",
+    )
 
     # B-15: severity er betinget på registrert skade med materiell kostnad.
     severity_mask = model_frame["property_claims"].gt(0) & model_frame[
@@ -68,6 +77,7 @@ def build_severity_inputs(development):
     severity_frame["average_severity"] = (
         severity_frame["property_incurred"] / severity_frame["property_claims"]
     )
+    assert_severity_frame(model_frame, severity_frame, development)  # sanity-sjekk, kan fjernes
     return {"model_frame": model_frame, "severity_frame": severity_frame}
 
 
