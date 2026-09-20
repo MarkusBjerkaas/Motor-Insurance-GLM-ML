@@ -2,7 +2,7 @@
 ---
 Dette prosjektet presenterer et rammeverk for forsikringsprising basert på et anonymisert, offentlig tilgjengelig datasett fra spansk motorforsikring i perioden 2022 til 2024. Prosjektet modellerer kun kaskoskader, selv om datasettet inneholder flere ulike dekningstyper, blant annet brann, glass og ansvar (se en mer detaljert diskusjon av dette senere). Denne avgrensningen gjøres på grunn av strukturelle forskjeller i skadeprosessene, og det er derfor sannsynlig at separat modellering vil gi mer presise resultater.
 
-Jeg bygger et frekvens-severity-rammeverk basert på Generalized Linear Models (GLM) for å beregne ren premie. I tillegg inkluderer jeg en Tweedie GLM som modellerer ren premie direkte, samt CatBoost som modellerer teknisk premie direkte. Modellene evalueres på 2024-data som holdes helt utenfor modellutviklingen. Modellene presterer relativt likt på testkriteriene, og bootstrapping brukes derfor for å undersøke om forskjellene mellom dem er reelle eller kan skyldes tilfeldig variasjon.
+Jeg bygger et frekvens-severity-rammeverk basert på Generalized Linear Models (GLM) for å beregne ren premie. I tillegg inkluderer jeg en Tweedie GLM som modellerer ren premie direkte, samt CatBoost som modellerer ren premie direkte. Modellene evalueres på 2024-data som holdes helt utenfor modellutviklingen. Modellene presterer relativt likt på testkriteriene, og bootstrapping brukes derfor for å undersøke om forskjellene mellom dem er reelle eller kan skyldes tilfeldig variasjon.
 ## Resultater: urørt 2024-testsett
 
 Modellene ble spesifisert og låst på 2022–2023, og evaluert én gang på 2024. Det er brukt
@@ -10,9 +10,15 @@ en parvis bootstrap over `insured_id` ($B=10\,000$; 95 % percentilintervall) for
 kvantifisere usikkerheten i forskjeller i Tweedie-deviance og Gini. Alle parvise
 intervaller inkluderer null. Modellene kan derfor ikke skilles statistisk på
 testsettet; små forskjeller i punktestimat er ikke en dokumentert modellvinner.
-Den største devianceforskjellen er mellom toleddet GLM og CatBoost: $0,033$ med
-95 % KI $[-0,005, 0,072]$. Gini-forskjellene er høyst $0,004$, med intervaller på
-omtrent $\pm 0,006$–$0,007$.
+Den største devianceforskjellen er mellom toleddet GLM og CatBoost: $0,033$ lavere
+deviance for toleddet, med 95 % KI $[-0,005, 0,072]$. Gini-forskjellene er høyst
+$0,004$, med intervaller på omtrent $\pm 0,006$–$0,007$. Toleddet GLM har dermed
+det beste *punktestimatet* (fet skrift i tabellen), men det er ikke en *dokumentert*
+forskjell fra de andre modellene.
+
+`year` er en kategorisk term, og 2024 finnes ikke i treningsdata. Alle modeller
+skåres derfor med 2023-årseffekten, og en endring i pris- eller skadenivå fra 2023
+til 2024 havner i porteføljebalansen og er ikke nødvendigvis en modellfeil.
 
 Tweedie-GLM og frekvens–severity-GLM er de foretrukne alternativene fordi de er
 transparente og enkle å forklare. Tweedie er det enkleste ett-trinnsalternativet,
@@ -25,6 +31,12 @@ rangeringsevne i denne evalueringen.
 | **Toleddet GLM** | **32,180** | **0,300** | **+0,9 %** |
 | Tweedie-GLM | 32,204 | 0,298 | −0,8 % |
 | CatBoost | 32,213 | 0,295 | −4,0 % |
+| *CatBoost, rekalibrert (post hoc)* | *32,214* | *0,295* | *−1,4 %* |
+
+Rekalibrert CatBoost er en **post-hoc sensitivitetsanalyse**, ikke en forhåndsspesifisert
+hovedmodell. Den skalerer CatBoost med én nivåfaktor ($c = 1{,}027$) estimert fra
+OOF-prediksjoner på 2022–2023 og ble lagt til etter at CatBoost var låst. Faktoren
+flytter balansen mot null, men endrer verken rangering (Gini) eller deviance.
 
 ![Sammenligning av modellene på 2024-testsettet](docs/figures/model_comparison_2024.png)
 
@@ -122,7 +134,7 @@ er ren premie uten kostnadspåslag, avkastning og margin, og ikke en tariff.
 
 **Tweedie** ([`04_tweedie.ipynb`](notebooks/04_tweedie.ipynb)) — bruker en Tweedie-GLM med log-link og eksponeringsvekter, uten offset, for å predikere ren premie direkte, som ett-trinnsalternativet til frekvens $\times$ severity. Den valgte 15-parametersmodellen bruker $p = 1{,}744$ og har OOF Tweedie-deviance på 33,2572. CatBoost-residualdiagnostikken reduserer deviancen med 0,0061 (0,018 %) i fire av fem folder. Det er et svakt signal om gjenværende kompleksitet, men påviser ikke en bestemt interaksjon eller ikke-linearitet og endrer ikke modellen.
 
-**CatBoost** ([`05_catboost.ipynb`](notebooks/05_catboost.ipynb)) — er maskinlæringsutfordreren som bruker Tweedie-tapsfunksjon til å predikere ren premie direkte. Den oppnår pooled OOF-deviance på 33,2775 mot 34,0919 for nullmodellen ($D^2 = 0,0239$). Dette er en utviklingsscore, ikke en endelig testscore.
+**CatBoost** ([`05_catboost.ipynb`](notebooks/05_catboost.ipynb)) — er maskinlæringsutfordreren som bruker Tweedie-tapsfunksjon til å predikere ren premie direkte. Den oppnår pooled OOF-deviance på 33,244 mot 34,0919 for nullmodellen ($D^2 = 0,0249$). Dette er en utviklingsscore, ikke en endelig testscore.
 
 **Endelig sammenligning** ([`model_results.ipynb`](notebooks/model_results.ipynb)) — når alle spesifikasjoner er låst, lastes de refittede modellene og vurderes én gang på 2024 som et urørt out-of-sample-testsett. Sammenligningen vurderer både prediktiv rangering og kalibrering av ren premie, og brukes til å skille mellom modeller med tilnærmet like resultater på ett enkelt kriterium.
 
@@ -164,7 +176,7 @@ En interaksjon testes bare når begge hovedeffektene allerede er i modellen, og 
 De to geografivariablene testes både som alternativer og sammen. Ingen sluttmodell beholder begge: de beskriver delvis samme geografiske signal, og den ekstra variabelen må derfor dokumentere stabil, selvstendig prediktiv verdi for å bli med. Dette skjedde ikke i seleksjonen.
 - **`payment_frequency`** er frekvensmodellens kontraktsvariabel. Den kan reflektere forskjeller i kunde- og kontraktsmiks som samvarierer med rapportert skadefrekvens; den tolkes ikke kausalt.
 
-Variablene testes videre med fem gruppefolder på `insured_id`. Seleksjonalgoritmen er utformet slik at ekstra frihetsgrader inkluderes dersom signalet ikke kan skilles fra støy. En kandidat beholdes bare dersom den oppfyller alle fire kriteriene:
+Variablene testes videre med fem gruppefolder på `insured_id`. Seleksjonsalgoritmen er utformet slik at ekstra kompleksitet bare beholdes når CV-forbedringen er robust nok til å skilles fra støy. En kandidat beholdes bare dersom den oppfyller alle fire kriteriene:
 
 1. Gir lavere samlet OOF-deviance enn modellen den utfordrer.
 2. Gir lavere deviance i minst fire av fem valideringsfolder.
@@ -219,6 +231,10 @@ tuningen i `05_catboost` er den tyngste kjøringen.
 Prosjektet modellerer kun kaskoskader. Ansvarsskader kan ha en mer fremtredende
 halerisiko og ville kreve en egen modellstrategi, eventuelt med separat hale- eller
 stor-skadebehandling.
+
+CatBoost-hyperparametrene velges, og utviklings-OOF-prediksjonene beregnes, på de
+samme GroupKFold-foldene. Utviklingsscoren er dermed ikke nested CV og kan være noe
+optimistisk. 2024-evalueringen påvirkes ikke av dette.
 
 ## Datakilde og begrensninger
 
